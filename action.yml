@@ -17,6 +17,11 @@ inputs:
     description: 'AI models based on selected provider.'
     required: true
     default:
+  codebase_high_overview_descripton:
+    description:
+      'Please give high overview about the codebase (e.g framework used, design
+      pattern, business context, etc.)'
+    required: true
   GITHUB_WORKSPACE:
     description: 'just pass the github.workspace value'
     required: true
