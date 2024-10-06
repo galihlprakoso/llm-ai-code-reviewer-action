@@ -52131,6 +52131,7 @@ exports.getReadme = getReadme;
 exports.shouldReview = shouldReview;
 exports.commentOnPullRequest = commentOnPullRequest;
 exports.submitReview = submitReview;
+exports.getFileChangePatch = getFileChangePatch;
 exports.getPullRequestContext = getPullRequestContext;
 const core = __importStar(__nccwpck_require__(42186));
 const github = __importStar(__nccwpck_require__(95438));
@@ -52148,10 +52149,6 @@ core.debug(`[github.ts] - context: ${JSON.stringify({
     repo,
     pull_number
 })}`);
-async function fetchText(url) {
-    const resp = await fetch(url);
-    return await resp.text();
-}
 async function getRepoStructure(path = '', ref = undefined) {
     try {
         const { data: contents } = await octokit.repos.getContent({
@@ -52275,18 +52272,35 @@ async function submitReview(review_summary, comments, action) {
         event: action
     });
 }
+let listChangesCache = undefined;
+async function getFileChangePatch(path) {
+    if (listChangesCache) {
+        return (listChangesCache.data.find(change => change.filename === path)?.patch ||
+            'NOT_FOUND');
+    }
+    return 'NOT_FOUND';
+}
 async function getPullRequestContext() {
     const readme = await getReadme();
     core.debug(`[readme] - ${readme}`);
     const headRefFolderStructure = await getLocalRepoStructure(GITHUB_WORKSPACE, context.payload.pull_request.head.ref);
     core.debug(`[headRefFolderStructure] - ${headRefFolderStructure}`);
     const prDetails = await octokit.pulls.get({ owner, repo, pull_number });
-    const diff = await fetchText(prDetails.data.diff_url);
-    // const reviews = await octokit.pulls.listReviews({
-    //   pull_number,
-    //   owner,
-    //   repo
-    // })
+    listChangesCache = await octokit.pulls.listFiles({
+        owner,
+        repo,
+        pull_number
+    });
+    const listReviews = await octokit.pulls.listReviews({
+        pull_number,
+        owner,
+        repo
+    });
+    const listReviewComments = await octokit.pulls.listReviewComments({
+        pull_number,
+        owner,
+        repo
+    });
     core.debug(`[pullRequestDetail] - ${JSON.stringify(prDetails.data)}`);
     return `==================== README.md ====================
 ${readme}
@@ -52301,8 +52315,14 @@ Mergeable: ${prDetails.data.mergeable ? 'YES' : 'NO'}
 Mergeable State: ${prDetails.data.mergeable_state}
 Changed Files: ${prDetails.data.changed_files}
 ===================================================
-==================== Pull Request Diff ====================
-${diff}
+==================== Pull Request Changes Path ====================
+${listChangesCache.data.map(change => `- Path: ${change.filename}\n`)}
+===================================================
+==================== Pull Request Reviews ====================
+${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}\n`)}
+===================================================
+==================== Pull Request Review Comments ====================
+${listReviewComments.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}, Path: ${review.path}, Position: ${review.position}\n`)}
 ===================================================`;
 }
 
@@ -52341,15 +52361,14 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.reviewPullRequest = reviewPullRequest;
 const core = __importStar(__nccwpck_require__(42186));
 const messages_1 = __nccwpck_require__(94976);
-const tools_1 = __nccwpck_require__(53173);
-const zod_1 = __nccwpck_require__(63301);
 const langgraph_1 = __nccwpck_require__(75054);
 const langgraph_2 = __nccwpck_require__(75054);
-const prebuilt_1 = __nccwpck_require__(26773);
 const groq_1 = __nccwpck_require__(69690);
-const tavily_search_1 = __nccwpck_require__(16033);
-const github_1 = __nccwpck_require__(70978);
 const google_genai_1 = __nccwpck_require__(11789);
+const process_1 = __nccwpck_require__(77282);
+const github_1 = __nccwpck_require__(70978);
+const zod_1 = __nccwpck_require__(63301);
+const llm_tools_1 = __nccwpck_require__(71573);
 const AI_PROVIDER = core.getInput('ai_provider', {
     required: true,
     trimWhitespace: true
@@ -52357,6 +52376,10 @@ const AI_PROVIDER = core.getInput('ai_provider', {
 const AI_PROVIDER_MODEL = core.getInput('ai_provider_model', {
     required: true,
     trimWhitespace: true
+});
+const CODEBASE_HIGH_OVERVIEW_DESCRIPTION = core.getInput('codebase_high_overview_descripton', {
+    required: true,
+    trimWhitespace: false
 });
 const GOOGLE_GEMINI_API_KEY = core.getInput('GOOGLE_GEMINI_API_KEY', {
     required: false,
@@ -52366,64 +52389,232 @@ const GROQ_API_KEY = core.getInput('GROQ_API_KEY', {
     required: false,
     trimWhitespace: true
 });
-const TAVILY_API_KEY = core.getInput('TAVILY_API_KEY', {
-    required: false,
-    trimWhitespace: true
-});
-const TOOL_RESPONSE_SUCCESS = 'SUCCESS';
-const TOOL_RESPONSE_FAILED = 'FAILED';
 const AI_PROVIDER_GROQ = 'GROQ';
 const AI_PROVIDER_GEMINI = 'GEMINI';
-const comments = [];
 const StateAnnotation = langgraph_2.Annotation.Root({
     messages: (0, langgraph_2.Annotation)({
-        reducer: (x, y) => x.concat(y)
+        reducer: (x, y) => x.concat(y),
+        default: () => []
+    }),
+    comments: (0, langgraph_2.Annotation)({
+        reducer: (x, y) => x.concat(y),
+        default: () => []
     })
 });
-const commentPullRequestTool = (0, tools_1.tool)(async ({ comment, path, position }) => {
-    core.debug(`[comment_pull_request]: called!`);
-    comments.push({
-        comment: `${comment}\n\nReviewed by: [ai-code-review-action](https://github.com/galihlprakoso/ai-code-reviewer-action)`,
-        path,
-        position
-    });
-    core.debug(`[comment_pull_request]: ${TOOL_RESPONSE_SUCCESS}`);
-    return TOOL_RESPONSE_SUCCESS;
-}, {
-    name: 'comment_pull_request',
-    description: 'Call to add commment to pull request. It will return FAILED when the action failed, and SUCCESS when the action succeed.',
-    schema: zod_1.z.object({
-        comment: zod_1.z
-            .string()
-            .describe('Your comment to specific file and position.'),
-        path: zod_1.z
-            .string()
-            .describe('Path to file (e.g <folder name>/<file name>.<file extension>'),
-        position: zod_1.z
-            .number()
-            .describe('The position in the diff where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.')
-    })
-});
-const submitReviewTool = (0, tools_1.tool)(async ({ review_summary, review_action }) => {
-    try {
-        core.debug(`[submit_review]: called!`);
-        (0, github_1.submitReview)(review_summary, comments, review_action);
-        core.debug(`[submit_review]: ${TOOL_RESPONSE_SUCCESS}!`);
-        return TOOL_RESPONSE_SUCCESS;
+function getModel() {
+    let model;
+    if (AI_PROVIDER === AI_PROVIDER_GROQ && GROQ_API_KEY) {
+        model = new groq_1.ChatGroq({
+            model: AI_PROVIDER_MODEL,
+            temperature: 0,
+            maxTokens: undefined,
+            maxRetries: 2,
+            apiKey: GROQ_API_KEY
+        });
     }
-    catch (err) {
-        core.debug(`[submit_review]: ${TOOL_RESPONSE_FAILED}!. Err: ${err.message}`);
-        return TOOL_RESPONSE_FAILED;
+    else if (AI_PROVIDER === AI_PROVIDER_GEMINI && GOOGLE_GEMINI_API_KEY) {
+        model = new google_genai_1.ChatGoogleGenerativeAI({
+            model: AI_PROVIDER_MODEL,
+            apiKey: GOOGLE_GEMINI_API_KEY,
+            temperature: 0,
+            maxRetries: 2
+        });
     }
-}, {
-    name: 'submit_review',
-    description: 'Call to submit your review with all previously added comments.. It will return FAILED when the action failed, and SUCCESS when the action succeed.',
-    schema: zod_1.z.object({
+    else {
+        core.setFailed(`API KEY for provider: ${AI_PROVIDER} is not provided!`);
+        (0, process_1.exit)(1);
+    }
+    return model;
+}
+async function callInputUnderstandingAgent(
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+_state) {
+    core.info('[LLM] - Understanding the input...');
+    const pullRequestContext = await (0, github_1.getPullRequestContext)();
+    const model = getModel();
+    const modelWithTools = model.bindTools(llm_tools_1.analysisTools);
+    const response = await modelWithTools.invoke([
+        new messages_1.SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to answer these questions under two sections based on given repository informations:
+  - Understanding given repository information (e.g README file, folder structure, etc.)
+    - What framework is used?
+    - What kind of coding styles are used?
+    - What design patterns are used?
+  - Understanding given pull request information
+    - What's the intention of the pull request?
+    - What kind of changes introduced in this pull request?
+    - What's the impact of this pull request?
+  - Understanding the business / domain logic context?
+    - What's the high overview of the business / domain in this repository?
+    - What's the high overview about the business / domain logic?
+
+You can use available tools to enrich your answer to those questions.`),
+        new messages_1.HumanMessage(`# Codebase High Overview Description
+${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
+# Repository and Pull Request Information
+${pullRequestContext}`)
+    ]);
+    return { messages: [response] };
+}
+async function callKnowledgeBaseGathererAgent(state) {
+    core.info('[LLM] - Gathering knowledge base...');
+    const model = getModel();
+    const modelWithTools = model.bindTools(llm_tools_1.knowledgeBaseTools);
+    const response = await modelWithTools.invoke([
+        new messages_1.SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to gather additional knowledge needed
+based on given informations given by previous AI agent (previous agent was doing input analysis: understanding the repository and pull request information). You should use given tools to gather all knowledge that will be passed to next agent. You will need to gather knowledge for each of this topic based on given information by previous agent:
+- Design Pattern Guide
+- Coding Style Guide
+- Business / Domain Knowledge Guide`),
+        ...state.messages
+    ]);
+    return { messages: [response] };
+}
+async function callFileSelectorAgent(state) {
+    const model = getModel();
+    const modelWithTools = model.bindTools(llm_tools_1.fileSelecterAgentTools);
+    const response = await modelWithTools.invoke([
+        new messages_1.SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed.
+Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
+You can utilize these available tools to gather more information about specific file you interested:
+- "get_file_changes_patch" - this tool will give you diff changes between source and target branch for the specific file.
+- "get_file_full_content" - when patch is not enough, you can also use this tool to get full content of that file.`),
+        ...state.messages
+    ]);
+    return { messages: [response] };
+}
+async function callReviewCommentAgentNode(state) {
+    const model = getModel();
+    const modelWithStructuredOutput = model.withStructuredOutput(zod_1.z.object({
+        comments: zod_1.z
+            .array(zod_1.z.object({
+            comment: zod_1.z
+                .string()
+                .describe('Your comment to specific file and position.'),
+            path: zod_1.z
+                .string()
+                .describe('Path to file (e.g <folder name>/<file name>.<file extension>'),
+            position: zod_1.z
+                .number()
+                .describe('The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.')
+        }))
+            .describe('Array of review comments.')
+    }));
+    const response = await modelWithStructuredOutput.invoke([
+        new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review comments based on given informations provided by previous agents' conversations.
+You should give me list of review comments in a structured output.`),
+        ...state.messages
+    ]);
+    return { comments: response.comments };
+}
+async function callReviewSummaryAgentNode(state) {
+    const model = getModel();
+    const modelWithStructuredOutput = model.withStructuredOutput(zod_1.z.object({
         review_summary: zod_1.z.string().describe('Your PR Review summarization.'),
         review_action: zod_1.z
             .enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT'])
             .describe('The review action you want to perform. The review actions include: APPROVE, REQUEST_CHANGES, or COMMENT.')
-    })
+    }));
+    const response = await modelWithStructuredOutput.invoke([
+        new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review summary and define review action type based on given informations provided by previous agents' conversations.
+You must create review summary, and decide the review action type.`),
+        ...state.messages
+    ]);
+    await (0, github_1.submitReview)(response.review_summary, state.comments, response.review_action);
+    return { messages: [] };
+}
+const workflow = new langgraph_1.StateGraph(StateAnnotation)
+    .addNode('input_understanding_agent', callInputUnderstandingAgent)
+    .addNode('analysis_tools', llm_tools_1.analysisToolsNode)
+    .addNode('knowledge_base_tools', llm_tools_1.knowledgeBaseToolsNode)
+    .addNode('file_selector_agent_tools', llm_tools_1.fileSelecterAgentToolsNode)
+    .addNode('knowledge_base_gatherer_agent', callKnowledgeBaseGathererAgent)
+    .addNode('file_selector_agent', callFileSelectorAgent)
+    .addNode('code_review_comment_agent', callReviewCommentAgentNode)
+    .addNode('code_review_summary_agent', callReviewSummaryAgentNode)
+    .addEdge(langgraph_1.START, 'input_understanding_agent')
+    .addConditionalEdges('input_understanding_agent', (state) => {
+    const messages = state.messages;
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.tool_calls?.length) {
+        return 'analysis_tools';
+    }
+    return 'knowledge_base_gatherer_agent';
+})
+    .addEdge('analysis_tools', 'input_understanding_agent')
+    .addConditionalEdges('knowledge_base_gatherer_agent', (state) => {
+    const messages = state.messages;
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.tool_calls?.length) {
+        return 'knowledge_base_tools';
+    }
+    return 'file_selector_agent';
+})
+    .addEdge('knowledge_base_tools', 'knowledge_base_gatherer_agent')
+    .addConditionalEdges('file_selector_agent', (state) => {
+    const messages = state.messages;
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.tool_calls?.length) {
+        return 'file_selector_agent_tools';
+    }
+    return 'code_review_comment_agent';
+})
+    .addEdge('file_selector_agent_tools', 'file_selector_agent')
+    .addEdge('code_review_comment_agent', 'code_review_summary_agent')
+    .addEdge('code_review_summary_agent', langgraph_1.END);
+const checkpointer = new langgraph_2.MemorySaver();
+const graph = workflow.compile({ checkpointer });
+async function reviewPullRequest() {
+    await graph.invoke({
+        messages: [new messages_1.HumanMessage('Please review my pull request.')]
+    }, { configurable: { thread_id: '42' } });
+}
+
+
+/***/ }),
+
+/***/ 71573:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.fileSelecterAgentToolsNode = exports.knowledgeBaseToolsNode = exports.analysisToolsNode = exports.fileSelecterAgentTools = exports.knowledgeBaseTools = exports.analysisTools = void 0;
+const tavily_search_1 = __nccwpck_require__(16033);
+const stackexchange_1 = __nccwpck_require__(53199);
+const wikipedia_query_run_1 = __nccwpck_require__(87079);
+const github_1 = __nccwpck_require__(70978);
+const prebuilt_1 = __nccwpck_require__(26773);
+const tools_1 = __nccwpck_require__(53173);
+const zod_1 = __nccwpck_require__(63301);
+const core = __importStar(__nccwpck_require__(42186));
+const TOOL_RESPONSE_SUCCESS = 'SUCCESS';
+const TOOL_RESPONSE_FAILED = 'FAILED';
+const TAVILY_API_KEY = core.getInput('TAVILY_API_KEY', {
+    required: false,
+    trimWhitespace: true
 });
 const getFileContentTool = (0, tools_1.tool)(async ({ path }) => {
     try {
@@ -52437,7 +52628,7 @@ const getFileContentTool = (0, tools_1.tool)(async ({ path }) => {
         return 'NOT_FOUND';
     }
 }, {
-    name: 'get_file_content',
+    name: 'get_file_full_content',
     description: 'Call to get the content of specific file in the source branch to enrich your decision before reviewing specific line on that file. It will return NOT_FOUND if the file is not exists.',
     schema: zod_1.z.object({
         path: zod_1.z
@@ -52445,106 +52636,55 @@ const getFileContentTool = (0, tools_1.tool)(async ({ path }) => {
             .describe('Path to file (e.g <folder name>/<file name>.<file extension>')
     })
 });
-const tools = [
-    commentPullRequestTool,
+const getFileChangesPatchTool = (0, tools_1.tool)(async ({ path }) => {
+    try {
+        core.debug(`[get_file_content]: called!`);
+        const fileContent = await (0, github_1.getFileChangePatch)(path);
+        core.debug(`[get_file_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`);
+        return fileContent;
+    }
+    catch (err) {
+        core.debug(`[get_file_content]: ${TOOL_RESPONSE_FAILED}. fileContent: ${err.message}`);
+        return 'NOT_FOUND';
+    }
+}, {
+    name: 'get_file_changes_patch',
+    description: "Call to get the patch of specific file that describe it's differences between source and target branch.",
+    schema: zod_1.z.object({
+        path: zod_1.z
+            .string()
+            .describe('Path to file (e.g <folder name>/<file name>.<file extension>')
+    })
+});
+const tavilySearchToolArr = TAVILY_API_KEY
+    ? [new tavily_search_1.TavilySearchResults({ maxResults: 3, apiKey: TAVILY_API_KEY })]
+    : [];
+const stackExchangeTitleTool = new stackexchange_1.StackExchangeAPI({
+    queryType: 'title'
+});
+const wikipediaQueryRunTool = new wikipedia_query_run_1.WikipediaQueryRun({
+    topKResults: 3,
+    maxDocContentLength: 4000
+});
+exports.analysisTools = [
     getFileContentTool,
-    submitReviewTool,
-    ...(TAVILY_API_KEY
-        ? [new tavily_search_1.TavilySearchResults({ maxResults: 3, apiKey: TAVILY_API_KEY })]
-        : [])
+    ...tavilySearchToolArr,
+    wikipediaQueryRunTool,
+    stackExchangeTitleTool
 ];
-const toolNode = new prebuilt_1.ToolNode(tools);
-function shouldContinue(state) {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
-        return 'tools';
-    }
-    return '__end__';
-}
-async function callModel(state) {
-    let model;
-    if (AI_PROVIDER === AI_PROVIDER_GROQ && GROQ_API_KEY) {
-        model = new groq_1.ChatGroq({
-            model: AI_PROVIDER_MODEL,
-            temperature: 0,
-            maxTokens: undefined,
-            maxRetries: 2,
-            apiKey: GROQ_API_KEY
-        }).bindTools(tools);
-    }
-    else if (AI_PROVIDER === AI_PROVIDER_GEMINI && GOOGLE_GEMINI_API_KEY) {
-        model = new google_genai_1.ChatGoogleGenerativeAI({
-            model: AI_PROVIDER_MODEL,
-            apiKey: GOOGLE_GEMINI_API_KEY,
-            temperature: 0,
-            maxRetries: 2
-        }).bindTools(tools);
-    }
-    else {
-        core.setFailed(`API KEY for provider: ${AI_PROVIDER} is not provided!`);
-        return;
-    }
-    const messages = state.messages;
-    const response = await model.invoke(messages);
-    return { messages: [response] };
-}
-const workflow = new langgraph_1.StateGraph(StateAnnotation)
-    .addNode('agent', callModel)
-    .addNode('tools', toolNode)
-    .addEdge(langgraph_1.START, 'agent')
-    .addConditionalEdges('agent', shouldContinue)
-    .addEdge('tools', 'agent');
-const checkpointer = new langgraph_2.MemorySaver();
-const app = workflow.compile({ checkpointer });
-async function reviewPullRequest(pull_request_context) {
-    core.debug(`[reviewPullRequest]: called. pull_request_context: ${pull_request_context}`);
-    const messages = await app.invoke({
-        messages: [
-            new messages_1.SystemMessage(`You are an AI Assistant that help developer to do code review on their pull requests.
-You MUST call the "comment_pull_request" function to add comment to specific line on some files. And you MUST call
-the "get_file_content" tool to enrich your feedback before adding any comment using the "comment_pull_request" tool.
-Your comment is not directly published, after you've done adding your review comments, you MUST call the "submit_review" tool,
-and please provide your overall review summarization on that tool's parameter along with the action you want to perform.
-
-The sequence of tool calling is:
-1. get_file_content. to get content of specific file. ${TAVILY_API_KEY ? 'and maybe the Tavily search tool to browse the internet if you need additional information from the internet.' : ''}
-2. comment_pull_request. to submit comment on specific file and specific position.
-3. submit_review. after you've done iterationg on number 1 and 2. You MUST call this before ending your job as an assistant. Calling
-to this function is mandatory.
-
-Please review based on these points from Uncle Bob's guideline about clean code:
-1. **Meaningful names**
-2. **Functions should be small**
-3. **Single Responsibility Principle (SRP)**
-4. **Avoid long argument lists**
-5. **DRY (Don’t Repeat Yourself)**
-6. **Prefer descriptive over clever code**
-7. **Avoid deeply nested structures**
-8. **Write self-documenting code**
-9. **Use clear and consistent formatting**
-10. **Keep comments minimal and relevant**
-11. **Code should express the intent clearly**
-12. **Minimize dependencies**
-13. **Error handling should not obscure logic**
-14. **Follow proper object-oriented design principles**
-15. **Write tests for your code (TDD)**
-16. **Avoid magic numbers and hardcoded values**
-17. **Refactor regularly**
-18. **Keep code simple and avoid over-engineering**
-19. **Use meaningful and precise comments if necessary**
-20. **Class and function names should reveal intent**
-21. **Separate concerns across modules and classes**
-22. **Keep functions pure (avoid side effects)**
-23. **Optimize for readability, not cleverness**
-24. **Code should be consistent with the surrounding codebase**`),
-            new messages_1.HumanMessage(`Pull Request Context:
-${pull_request_context}`)
-        ]
-    }, { configurable: { thread_id: '42' } });
-    core.debug(`[reviewPullRequest]: Success. comments:${JSON.stringify(comments)}`);
-    core.debug(`[reviewPullRequest]: Success. messages:${JSON.stringify(messages)}`);
-}
+exports.knowledgeBaseTools = [
+    getFileContentTool,
+    ...tavilySearchToolArr,
+    wikipediaQueryRunTool,
+    stackExchangeTitleTool
+];
+exports.fileSelecterAgentTools = [
+    getFileChangesPatchTool,
+    getFileContentTool
+];
+exports.analysisToolsNode = new prebuilt_1.ToolNode(exports.analysisTools);
+exports.knowledgeBaseToolsNode = new prebuilt_1.ToolNode(exports.knowledgeBaseTools);
+exports.fileSelecterAgentToolsNode = new prebuilt_1.ToolNode(exports.fileSelecterAgentTools);
 
 
 /***/ }),
@@ -52588,8 +52728,7 @@ async function run() {
         return;
     }
     try {
-        const pullRequestContext = await (0, github_1.getPullRequestContext)();
-        await (0, llm_1.reviewPullRequest)(pullRequestContext);
+        await (0, llm_1.reviewPullRequest)();
     }
     catch (error) {
         core.setFailed(error.message);
@@ -52780,6 +52919,14 @@ module.exports = require("path");
 
 "use strict";
 module.exports = require("perf_hooks");
+
+/***/ }),
+
+/***/ 77282:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("process");
 
 /***/ }),
 
@@ -59448,6 +59595,185 @@ exports.zodToJsonSchema = zodToJsonSchema;
 
 /***/ }),
 
+/***/ 29826:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.StackExchangeAPI = void 0;
+const tools_1 = __nccwpck_require__(53173);
+/**
+ * Class for interacting with the StackExchange API
+ * It extends the base Tool class to perform retrieval.
+ */
+class StackExchangeAPI extends tools_1.Tool {
+    constructor(params = {}) {
+        const { maxResult, queryType = "all", options, resultSeparator } = params;
+        super();
+        Object.defineProperty(this, "name", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "stackexchange"
+        });
+        Object.defineProperty(this, "description", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "Stack Exchange API Implementation"
+        });
+        Object.defineProperty(this, "pageSize", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: void 0
+        });
+        Object.defineProperty(this, "maxResult", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 3
+        });
+        Object.defineProperty(this, "key", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: void 0
+        });
+        Object.defineProperty(this, "accessToken", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: void 0
+        });
+        Object.defineProperty(this, "site", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "stackoverflow"
+        });
+        Object.defineProperty(this, "version", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "2.3"
+        });
+        Object.defineProperty(this, "baseUrl", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "https://api.stackexchange.com"
+        });
+        Object.defineProperty(this, "queryType", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "all"
+        });
+        Object.defineProperty(this, "options", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: {}
+        });
+        Object.defineProperty(this, "resultSeparator", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "\n\n"
+        });
+        this.maxResult = maxResult || this.maxResult;
+        this.pageSize = 100;
+        this.baseUrl = `${this.baseUrl}/${this.version}/`;
+        this.queryType = queryType === "all" ? "q" : queryType;
+        this.options = options || this.options;
+        this.resultSeparator = resultSeparator || this.resultSeparator;
+    }
+    async _call(query) {
+        const params = {
+            [this.queryType]: query,
+            site: this.site,
+            ...this.options,
+        };
+        const output = await this._fetch("search/excerpts", params);
+        if (output.items.length < 1) {
+            return `No relevant results found for '${query}' on Stack Overflow.`;
+        }
+        const questions = output.items
+            .filter((item) => item.item_type === "question")
+            .slice(0, this.maxResult);
+        const answers = output.items.filter((item) => item.item_type === "answer");
+        const results = [];
+        for (const question of questions) {
+            let res_text = `Question: ${question.title}\n${question.excerpt}`;
+            const relevant_answers = answers.filter((answer) => answer.question_id === question.question_id);
+            const accepted_answers = relevant_answers.filter((answer) => answer.is_accepted);
+            if (relevant_answers.length > 0) {
+                const top_answer = accepted_answers.length > 0
+                    ? accepted_answers[0]
+                    : relevant_answers[0];
+                const { excerpt } = top_answer;
+                res_text += `\nAnswer: ${excerpt}`;
+            }
+            results.push(res_text);
+        }
+        return results.join(this.resultSeparator);
+    }
+    /**
+     * Call the StackExchange API
+     * @param endpoint Name of the endpoint from StackExchange API
+     * @param params Additional parameters passed to the endpoint
+     * @param page Number of the page to retrieve
+     * @param filter Filtering properties
+     */
+    async _fetch(endpoint, params = {}, page = 1, filter = "default") {
+        try {
+            if (!endpoint) {
+                throw new Error("No end point provided.");
+            }
+            const queryParams = new URLSearchParams({
+                pagesize: this.pageSize.toString(),
+                page: page.toString(),
+                filter,
+                ...params,
+            });
+            if (this.key) {
+                queryParams.append("key", this.key);
+            }
+            if (this.accessToken) {
+                queryParams.append("access_token", this.accessToken);
+            }
+            const queryParamsString = queryParams.toString();
+            const endpointUrl = `${this.baseUrl}${endpoint}?${queryParamsString}`;
+            return await this._makeRequest(endpointUrl);
+        }
+        catch (e) {
+            throw new Error("Error while calling Stack Exchange API");
+        }
+    }
+    /**
+     * Fetch the result of a specific endpoint
+     * @param endpointUrl Endpoint to call
+     */
+    async _makeRequest(endpointUrl) {
+        try {
+            const response = await fetch(endpointUrl);
+            if (response.status !== 200) {
+                throw new Error(`HTTP Error: ${response.statusText}`);
+            }
+            return await response.json();
+        }
+        catch (e) {
+            throw new Error(`Error while calling Stack Exchange API: ${endpointUrl}`);
+        }
+    }
+}
+exports.StackExchangeAPI = StackExchangeAPI;
+
+
+/***/ }),
+
 /***/ 26818:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -59594,10 +59920,221 @@ exports.TavilySearchResults = TavilySearchResults;
 
 /***/ }),
 
+/***/ 21914:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.WikipediaQueryRun = void 0;
+const tools_1 = __nccwpck_require__(53173);
+/**
+ * Wikipedia query tool integration.
+ *
+ * Setup:
+ * Install `@langchain/community`. You'll also need an API key.
+ *
+ * ```bash
+ * npm install @langchain/community
+ * ```
+ *
+ * ## [Constructor args](https://api.js.langchain.com/classes/_langchain_community.tools_wikipedia_query_run.WikipediaQueryRun.html#constructor)
+ *
+ * <details open>
+ * <summary><strong>Instantiate</strong></summary>
+ *
+ * ```typescript
+ * import { WikipediaQueryRun } from "@langchain/community/tools/wikipedia_query_run";
+ *
+ * const tool = new WikipediaQueryRun({
+ *   topKResults: 3,
+ *   maxDocContentLength: 4000,
+ * });
+ * ```
+ * </details>
+ *
+ * <br />
+ *
+ * <details>
+ *
+ * <summary><strong>Invocation</strong></summary>
+ *
+ * ```typescript
+ * await tool.invoke("what is the current weather in sf?");
+ * ```
+ * </details>
+ *
+ * <br />
+ *
+ * <details>
+ *
+ * <summary><strong>Invocation with tool call</strong></summary>
+ *
+ * ```typescript
+ * // This is usually generated by a model, but we'll create a tool call directly for demo purposes.
+ * const modelGeneratedToolCall = {
+ *   args: {
+ *     input: "what is the current weather in sf?",
+ *   },
+ *   id: "tool_call_id",
+ *   name: tool.name,
+ *   type: "tool_call",
+ * };
+ * await tool.invoke(modelGeneratedToolCall);
+ * ```
+ *
+ * ```text
+ * ToolMessage {
+ *   "content": "...",
+ *   "name": "wikipedia-api",
+ *   "additional_kwargs": {},
+ *   "response_metadata": {},
+ *   "tool_call_id": "tool_call_id"
+ * }
+ * ```
+ * </details>
+ */
+class WikipediaQueryRun extends tools_1.Tool {
+    static lc_name() {
+        return "WikipediaQueryRun";
+    }
+    constructor(params = {}) {
+        super();
+        Object.defineProperty(this, "name", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "wikipedia-api"
+        });
+        Object.defineProperty(this, "description", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "A tool for interacting with and fetching data from the Wikipedia API."
+        });
+        Object.defineProperty(this, "topKResults", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 3
+        });
+        Object.defineProperty(this, "maxDocContentLength", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: 4000
+        });
+        Object.defineProperty(this, "baseUrl", {
+            enumerable: true,
+            configurable: true,
+            writable: true,
+            value: "https://en.wikipedia.org/w/api.php"
+        });
+        this.topKResults = params.topKResults ?? this.topKResults;
+        this.maxDocContentLength =
+            params.maxDocContentLength ?? this.maxDocContentLength;
+        this.baseUrl = params.baseUrl ?? this.baseUrl;
+    }
+    async _call(query) {
+        const searchResults = await this._fetchSearchResults(query);
+        const summaries = [];
+        for (let i = 0; i < Math.min(this.topKResults, searchResults.query.search.length); i += 1) {
+            const page = searchResults.query.search[i].title;
+            const pageDetails = await this._fetchPage(page, true);
+            if (pageDetails) {
+                const summary = `Page: ${page}\nSummary: ${pageDetails.extract}`;
+                summaries.push(summary);
+            }
+        }
+        if (summaries.length === 0) {
+            return "No good Wikipedia Search Result was found";
+        }
+        else {
+            return summaries.join("\n\n").slice(0, this.maxDocContentLength);
+        }
+    }
+    /**
+     * Fetches the content of a specific Wikipedia page. It returns the
+     * extracted content as a string.
+     * @param page The specific Wikipedia page to fetch its content.
+     * @param redirect A boolean value to indicate whether to redirect or not.
+     * @returns The extracted content of the specific Wikipedia page as a string.
+     */
+    async content(page, redirect = true) {
+        try {
+            const result = await this._fetchPage(page, redirect);
+            return result.extract;
+        }
+        catch (error) {
+            throw new Error(`Failed to fetch content for page "${page}": ${error}`);
+        }
+    }
+    /**
+     * Builds a URL for the Wikipedia API using the provided parameters.
+     * @param parameters The parameters to be used in building the URL.
+     * @returns A string representing the built URL.
+     */
+    buildUrl(parameters) {
+        const nonUndefinedParams = Object.entries(parameters)
+            .filter(([_, value]) => value !== undefined)
+            .map(([key, value]) => [key, `${value}`]);
+        const searchParams = new URLSearchParams(nonUndefinedParams);
+        return `${this.baseUrl}?${searchParams}`;
+    }
+    async _fetchSearchResults(query) {
+        const searchParams = new URLSearchParams({
+            action: "query",
+            list: "search",
+            srsearch: query,
+            format: "json",
+        });
+        const response = await fetch(`${this.baseUrl}?${searchParams.toString()}`);
+        if (!response.ok)
+            throw new Error("Network response was not ok");
+        const data = await response.json();
+        return data;
+    }
+    async _fetchPage(page, redirect) {
+        const params = new URLSearchParams({
+            action: "query",
+            prop: "extracts",
+            explaintext: "true",
+            redirects: redirect ? "1" : "0",
+            format: "json",
+            titles: page,
+        });
+        const response = await fetch(`${this.baseUrl}?${params.toString()}`);
+        if (!response.ok)
+            throw new Error("Network response was not ok");
+        const data = await response.json();
+        const { pages } = data.query;
+        const pageId = Object.keys(pages)[0];
+        return pages[pageId];
+    }
+}
+exports.WikipediaQueryRun = WikipediaQueryRun;
+
+
+/***/ }),
+
+/***/ 53199:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+module.exports = __nccwpck_require__(29826);
+
+/***/ }),
+
 /***/ 16033:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 module.exports = __nccwpck_require__(26818);
+
+/***/ }),
+
+/***/ 87079:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+module.exports = __nccwpck_require__(21914);
 
 /***/ }),
 

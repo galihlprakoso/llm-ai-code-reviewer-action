@@ -1,5 +1,5 @@
 import * as core from '@actions/core'
-import { getPullRequestContext, shouldReview } from './github'
+import { shouldReview } from './github'
 import { reviewPullRequest } from './llm'
 
 export async function run(): Promise<void> {
@@ -9,8 +9,7 @@ export async function run(): Promise<void> {
   }
 
   try {
-    const pullRequestContext = await getPullRequestContext()
-    await reviewPullRequest(pullRequestContext)
+    await reviewPullRequest()
   } catch (error) {
     core.setFailed((error as Error).message)
   }
