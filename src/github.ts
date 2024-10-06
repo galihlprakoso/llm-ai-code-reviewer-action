@@ -144,15 +144,27 @@ export async function commentOnPullRequest(
 
   const prDetails = await octokit.pulls.get({ owner, repo, pull_number })
 
-  await octokit.pulls.createReviewComment({
-    owner,
-    repo,
-    pull_number,
-    body: comment,
-    commit_id: prDetails.data.head.sha,
-    path,
-    position
-  })
+  try {
+    await octokit.pulls.createReviewComment({
+      owner,
+      repo,
+      pull_number,
+      body: comment,
+      commit_id: prDetails.data.head.sha,
+      path,
+      position
+    })
+  } catch (error) {
+    core.debug(
+      `[github.ts] - commentOnPullRequest: Err: ${(error as Error).message}. Args: ${JSON.stringify(
+        {
+          comment,
+          path,
+          position
+        }
+      )}`
+    )
+  }
 }
 
 export async function submitReview(
