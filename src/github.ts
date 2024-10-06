@@ -13,11 +13,13 @@ const owner = context.repo.owner
 const repo = context.repo.repo
 const pull_number = context.payload.pull_request?.number || 0
 
-core.debug(`[github.ts] - context: ${JSON.stringify({
-  owner,
-  repo,
-  pull_number
-})}`)
+core.debug(
+  `[github.ts] - context: ${JSON.stringify({
+    owner,
+    repo,
+    pull_number
+  })}`
+)
 
 async function fetchText(url: string): Promise<string> {
   const resp = await fetch(url)
@@ -84,7 +86,9 @@ export async function getLocalRepoStructure(
       }
     }
   } catch (error) {
-    core.debug(`[github.ts] - getLocalRepoStructure: ${(error as Error).message}`)
+    core.debug(
+      `[github.ts] - getLocalRepoStructure: ${(error as Error).message}`
+    )
     return ''
   }
 
