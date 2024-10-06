@@ -52143,6 +52143,11 @@ const context = github.context;
 const owner = context.repo.owner;
 const repo = context.repo.repo;
 const pull_number = context.payload.pull_request?.number || 0;
+core.debug(`[github.ts] - context: ${JSON.stringify({
+    owner,
+    repo,
+    pull_number
+})}`);
 async function fetchText(url) {
     const resp = await fetch(url);
     return await resp.text();
@@ -52173,7 +52178,7 @@ async function getRepoStructure(path = '', ref = undefined) {
         return markdownStructure;
     }
     catch (error) {
-        console.error('Error fetching repository contents:', error);
+        core.debug(`[github.ts] - getRepoStructure: ${error.message}`);
         return '';
     }
 }
@@ -52196,7 +52201,7 @@ async function getLocalRepoStructure(dirPath, currentPath = '') {
         }
     }
     catch (error) {
-        console.error('Error reading directory:', error);
+        core.debug(`[github.ts] - getLocalRepoStructure: ${error.message}`);
         return '';
     }
     return markdownStructure;
@@ -52237,15 +52242,24 @@ function shouldReview() {
 async function commentOnPullRequest(comment, path, position) {
     core.info(`Commenting on pull request. Path: ${path}, Position: ${position}, Comment: ${comment}`);
     const prDetails = await octokit.pulls.get({ owner, repo, pull_number });
-    await octokit.pulls.createReviewComment({
-        owner,
-        repo,
-        pull_number,
-        body: comment,
-        commit_id: prDetails.data.head.sha,
-        path,
-        position
-    });
+    try {
+        await octokit.pulls.createReviewComment({
+            owner,
+            repo,
+            pull_number,
+            body: comment,
+            commit_id: prDetails.data.head.sha,
+            path,
+            position
+        });
+    }
+    catch (error) {
+        core.debug(`[github.ts] - commentOnPullRequest: Err: ${error.message}. Args: ${JSON.stringify({
+            comment,
+            path,
+            position
+        })}`);
+    }
 }
 async function submitReview(review_summary, comments, action) {
     await octokit.pulls.createReview({
