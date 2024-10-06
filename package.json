@@ -66,7 +66,14 @@
     ]
   },
   "dependencies": {
-    "@actions/core": "^1.10.1"
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "@langchain/anthropic": "^0.3.3",
+    "@langchain/community": "^0.3.4",
+    "@langchain/core": "^0.3.7",
+    "@langchain/google-genai": "^0.1.0",
+    "@langchain/groq": "^0.1.2",
+    "@langchain/langgraph": "^0.2.11"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
