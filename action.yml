@@ -1,23 +1,40 @@
-name: 'The name of your action here'
-description: 'Provide a description here'
-author: 'Your name or organization here'
+name: 'LLM AI Code Reviewer Action'
+description:
+  'Smart AI Code Reviewer that support multiple AI providers (Currently support
+  Groq and Gemini).'
+author: 'galihlprakoso'
 
-# Add your action's branding here. This will appear on the GitHub Marketplace.
 branding:
-  icon: 'heart'
-  color: 'red'
+  icon: 'code'
+  color: 'purple'
 
-# Define your inputs here.
 inputs:
-  milliseconds:
-    description: 'Your input description here'
+  ai_provider:
+    description: 'AI providers (available values: GEMINI, GROQ)'
     required: true
-    default: '1000'
-
-# Define your outputs here.
-outputs:
-  time:
-    description: 'Your output description here'
+    default: 'GROQ'
+  ai_provider_model:
+    description: 'AI models based on selected provider.'
+    required: true
+    default:
+  GITHUB_WORKSPACE:
+    description: 'just pass the github.workspace value'
+    required: true
+  GITHUB_TOKEN:
+    description: 'GitHub token to interact with the repository.'
+    required: true
+  GOOGLE_GEMINI_API_KEY:
+    description:
+      'Google Gemini API Key. See more:
+      https://ai.google.dev/gemini-api/docs/api-key'
+    required: false
+  GROQ_API_KEY:
+    description: 'Groq API Key. Generate here: https://console.groq.com/keys'
+    required: false
+  TAVILY_API_KEY:
+    description:
+      'Tavily Search API Key. Generate here: https://app.tavily.com/home'
+    required: false
 
 runs:
   using: node20
