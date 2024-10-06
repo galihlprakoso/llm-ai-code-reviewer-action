@@ -37,11 +37,15 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   ai-code-review:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest    
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Run AI Code Review
         uses: galihlprakoso/llm-ai-code-reviewer-action@v1.0.3
         with:
