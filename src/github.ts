@@ -13,6 +13,12 @@ const owner = context.repo.owner
 const repo = context.repo.repo
 const pull_number = context.payload.pull_request?.number || 0
 
+core.debug(`[github.ts] - context: ${JSON.stringify({
+  owner,
+  repo,
+  pull_number
+})}`)
+
 async function fetchText(url: string): Promise<string> {
   const resp = await fetch(url)
   return await resp.text()
@@ -47,7 +53,7 @@ export async function getRepoStructure(
     }
     return markdownStructure
   } catch (error) {
-    console.error('Error fetching repository contents:', error)
+    core.debug(`[github.ts] - getRepoStructure: ${(error as Error).message}`)
     return ''
   }
 }
@@ -78,7 +84,7 @@ export async function getLocalRepoStructure(
       }
     }
   } catch (error) {
-    console.error('Error reading directory:', error)
+    core.debug(`[github.ts] - getLocalRepoStructure: ${(error as Error).message}`)
     return ''
   }
 
