@@ -1,6 +1,5 @@
 import * as core from '@actions/core'
 import {
-  AIMessageChunk,
   BaseMessage,
   HumanMessage,
   SystemMessage
@@ -11,18 +10,17 @@ import { ChatGroq } from '@langchain/groq'
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai'
 import { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { exit } from 'process'
-import { getPullRequestContext, submitReview } from './github'
-import { z } from 'zod'
 import {
-  analysisToolsNode,
-  analysisTools,
-  knowledgeBaseTools,
-  knowledgeBaseToolsNode,
-  fileSelecterAgentTools,
-  fileSelecterAgentToolsNode
-} from './llm_tools'
+  getFileContent,
+  getListFiles,
+  getPullRequestContext,
+  submitReview
+} from './github'
+import { z } from 'zod'
 import { PullRequestReviewComment } from './types'
 import { tool } from '@langchain/core/tools'
+import { knowledgeBaseTools, knowledgeBaseToolsNode } from './llm_tools'
+import { wait } from './utils'
 
 const AI_PROVIDER = core.getInput('ai_provider', {
   required: true,
@@ -51,10 +49,17 @@ const GROQ_API_KEY = core.getInput('GROQ_API_KEY', {
 const AI_PROVIDER_GROQ = 'GROQ'
 const AI_PROVIDER_GEMINI = 'GEMINI'
 
+const FILE_CHANGES_PATCH_TEXT_LIMIT = 10000
+const FULL_SOURCE_CODE_TEXT_LIMIT = 10000
+
 const StateAnnotation = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
     reducer: (x, y) => x.concat(y),
-    default: () => []
+    default: () => [
+      new SystemMessage(
+        'You are an AI Assistant that help human to do code review. Please follow instructions given by Human.'
+      )
+    ]
   }),
   comments: Annotation<PullRequestReviewComment[]>({
     reducer: (x, y) => x.concat(y),
@@ -88,8 +93,8 @@ function getModel(): BaseChatModel {
   return model
 }
 
-async function callInputUnderstandingAgent(
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function inputUnderstandingAgentNode(
+  // eslint-disable-next-line
   _state: typeof StateAnnotation.State
 ): Promise<
   | {
@@ -102,87 +107,52 @@ async function callInputUnderstandingAgent(
   const pullRequestContext = await getPullRequestContext()
 
   const model = getModel()
-  const modelWithTools = model.bindTools!(analysisTools)
 
-  const humanMessage = new HumanMessage(`# Codebase High Overview Description
-    ${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
-    # Repository and Pull Request Information
-    ${pullRequestContext}`)
+  const response = await model.invoke([
+    new HumanMessage(`Please answer these questions under two sections based on given repository informations:
+- Understanding given repository information (e.g README file, folder structure, etc.)
+- What framework is used?
+- What kind of coding styles are used?
+- What design patterns are used?
+- Understanding given pull request information
+- What's the intention of the pull request?
+- What kind of changes introduced in this pull request?
+- What's the impact of this pull request?
+- Understanding the business / domain logic context?
+- What's the high overview of the business / domain in this repository?
+- What's the high overview about the business / domain logic?
 
-  const response = await modelWithTools.invoke([
-    new SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to answer these questions under two sections based on given repository informations:
-  - Understanding given repository information (e.g README file, folder structure, etc.)
-    - What framework is used?
-    - What kind of coding styles are used?
-    - What design patterns are used?
-  - Understanding given pull request information
-    - What's the intention of the pull request?
-    - What kind of changes introduced in this pull request?
-    - What's the impact of this pull request?
-  - Understanding the business / domain logic context?
-    - What's the high overview of the business / domain in this repository?
-    - What's the high overview about the business / domain logic?
-
-You can use available tools to enrich your answer to those questions. You are an agent that only can call these tools:
-- get_files_full_content`),
-    humanMessage
+# Codebase High Overview Description
+${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
+# Repository and Pull Request Information
+${pullRequestContext}`)
   ])
 
-  return { messages: [humanMessage, response] }
+  return { messages: [response] }
 }
 
-async function callKnowledgeBaseGathererAgent(
+async function knowledgeUpdatesAgentNode(
   state: typeof StateAnnotation.State
 ): Promise<
   | {
-      messages: AIMessageChunk[]
+      messages: BaseMessage[]
     }
   | undefined
 > {
-  core.info('[LLM] - Gathering knowledge base...')
-
   const model = getModel()
+
   const modelWithTools = model.bindTools!(knowledgeBaseTools)
 
   const response = await modelWithTools.invoke([
-    new SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to gather additional knowledge needed
-based on given informations given by previous AI agent (previous agent was doing input analysis: understanding the repository and pull request information). You should use given tools to gather all knowledge that will be passed to next agent. You will need to gather knowledge for each of this topic based on given information by previous agent:
-- Design Pattern Guide
-- Coding Style Guide
-- Business / Domain Knowledge Guide
-
-You are an agent that only can call these tools:
-- tavily_search_results_json
-- wikipedia-api
-- stackexchange`),
-    ...state.messages
+    ...state.messages,
+    new HumanMessage(`Based on given high overview information about the pull request, please gather needed knowledge updates from the internet by using given tools
+(e.g latest library versions, framework updates, best practices, concepts, etc.)`)
   ])
 
   return { messages: [response] }
 }
 
-async function callFileSelectorAgent(
-  state: typeof StateAnnotation.State
-): Promise<
-  | {
-      messages: AIMessageChunk[]
-    }
-  | undefined
-> {
-  const model = getModel()
-  const modelWithTools = model.bindTools!(fileSelecterAgentTools)
-
-  const response = await modelWithTools.invoke([
-    new SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed from given pull request context form previous chats from Human.
-      Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
-      You should call the "get_files_changes_patch" and pass the paths of the files that's need to be reviewed.`),
-    ...state.messages
-  ])
-
-  return { messages: [response] }
-}
-
-async function callReviewCommentAgentNode(
+async function reviewCommentsAgentNode(
   state: typeof StateAnnotation.State
 ): Promise<
   | {
@@ -191,26 +161,14 @@ async function callReviewCommentAgentNode(
   | undefined
 > {
   const outputSchema = z.object({
-    comments: z
-      .array(
-        z.object({
-          comment: z
-            .string()
-            .describe('Your comment to specific file and position.'),
-          path: z
-            .string()
-            .describe(
-              'Path to file (e.g <folder name>/<file name>.<file extension>'
-            ),
-          position: z
-            .number()
-            .describe(
-              'The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.'
-            )
-        })
+    comment: z.string().describe('Your comment to specific file and position.'),
+    position: z
+      .number()
+      .describe(
+        'The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.'
       )
-      .describe('Array of review comments.')
   })
+
   const model = getModel()
   const finalResponseTool = tool(async () => '', {
     name: 'response',
@@ -219,25 +177,49 @@ async function callReviewCommentAgentNode(
   })
   const modelWithStructuredOutput = model.bindTools!([finalResponseTool])
 
-  const response = await modelWithStructuredOutput.invoke([
-    new SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review comments based on given informations provided by previous agents' conversations.
-You should give me list of review comments in a structured output. You cannot call tools.`),
-    ...state.messages
-  ])
+  const listFiles = await getListFiles()
 
-  if (response.tool_calls?.length) {
-    const tool_call_args = response.tool_calls[0].args
-    return { comments: tool_call_args.comments }
+  const comments: PullRequestReviewComment[] = []
+
+  for (let i = 0; i < listFiles.length; i++) {
+    const listFile = listFiles[i]
+
+    const fullFileContent = await getFileContent(listFile.filename)
+
+    const response = await modelWithStructuredOutput.invoke([
+      ...state.messages,
+      new HumanMessage(`Based on given informations from previous chats / messages, and given information below, please create code review comment. You must call "response" tool to give review,
+except the file doesn't need to be reviewed (dist files, generated files, and any other files that don't need to be reviewed.) or the file is already good, no need to comment, lgtm,, in that case, just don't call the tool.
+Filename: ${listFile.filename}
+Previous Filename: ${listFile.previous_filename}
+============== Changes Patch ==============
+${listFile.patch?.substring(0, FILE_CHANGES_PATCH_TEXT_LIMIT) || ''}
+===================================
+============ Full Source Code =============
+${fullFileContent.substring(0, FULL_SOURCE_CODE_TEXT_LIMIT)}
+===========================================`)
+    ])
+
+    if (response.tool_calls?.length) {
+      const tool_call_args = response.tool_calls[0].args
+      comments.push({
+        comment: tool_call_args.comment,
+        position: tool_call_args.position,
+        path: listFile.filename
+      })
+    }
+
+    await wait(1000)
   }
 
-  return { comments: [] }
+  return { comments }
 }
 
-async function callReviewSummaryAgentNode(
+async function reviewSummaryAgentNode(
   state: typeof StateAnnotation.State
 ): Promise<
   | {
-      messages: AIMessageChunk[]
+      messages: BaseMessage[]
     }
   | undefined
 > {
@@ -259,9 +241,18 @@ async function callReviewSummaryAgentNode(
   const modelWithStructuredOutput = model.bindTools!([finalResponseTool])
 
   const response = await modelWithStructuredOutput.invoke([
-    new SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review summary and define review action type based on given informations provided by previous agents' conversations.
-You must create review summary, and decide the review action type. You can only call "response" tool.`),
-    ...state.messages
+    ...state.messages,
+    new HumanMessage(`Please create review summary and define review action type based on given informations provided by previous conversations and given review comments.
+You must create review summary, and decide the review action type. You should call "response" tool to give review summary.
+
+Review Comments:
+${state.comments.map(
+  (comment, idx) => `=========== ${idx + 1} ===========
+Filename: ${comment.path}
+Position: ${comment.position}
+Review Comment: ${comment.comment}
+=========================`
+)}`)
   ])
 
   if (response.tool_calls?.length) {
@@ -277,23 +268,17 @@ You must create review summary, and decide the review action type. You can only 
 }
 
 const workflow = new StateGraph(StateAnnotation)
-  .addNode('analysis_tools', analysisToolsNode)
+  .addNode('input_understanding_agent_node', inputUnderstandingAgentNode)
+  .addNode('knowledge_updates_agent_node', knowledgeUpdatesAgentNode)
   .addNode('knowledge_base_tools', knowledgeBaseToolsNode)
-  .addNode('file_selector_agent_tools', fileSelecterAgentToolsNode)
-  .addNode('input_understanding_agent', callInputUnderstandingAgent)
-  .addNode('knowledge_base_gatherer_agent', callKnowledgeBaseGathererAgent)
-  .addNode('file_selector_agent', callFileSelectorAgent)
-  .addNode('code_review_comment_agent', callReviewCommentAgentNode)
-  .addNode('code_review_summary_agent', callReviewSummaryAgentNode)
-  .addEdge(START, 'input_understanding_agent')
-  .addEdge('input_understanding_agent', 'analysis_tools')
-  .addEdge('analysis_tools', 'knowledge_base_gatherer_agent')
-  .addEdge('knowledge_base_gatherer_agent', 'knowledge_base_tools')
-  .addEdge('knowledge_base_tools', 'file_selector_agent')
-  .addEdge('file_selector_agent', 'file_selector_agent_tools')
-  .addEdge('file_selector_agent_tools', 'code_review_comment_agent')
-  .addEdge('code_review_comment_agent', 'code_review_summary_agent')
-  .addEdge('code_review_summary_agent', END)
+  .addNode('review_comments_agent_node', reviewCommentsAgentNode)
+  .addNode('review_summary_agent_node', reviewSummaryAgentNode)
+  .addEdge(START, 'input_understanding_agent_node')
+  .addEdge('input_understanding_agent_node', 'knowledge_updates_agent_node')
+  .addEdge('knowledge_updates_agent_node', 'knowledge_base_tools')
+  .addEdge('knowledge_base_tools', 'review_comments_agent_node')
+  .addEdge('review_comments_agent_node', 'review_summary_agent_node')
+  .addEdge('review_summary_agent_node', END)
 
 const checkpointer = new MemorySaver()
 
@@ -302,7 +287,7 @@ const graph = workflow.compile({ checkpointer })
 export async function reviewPullRequest(): Promise<void> {
   await graph.invoke(
     {
-      messages: [new HumanMessage('Please review my pull request.')]
+      messages: []
     },
     { configurable: { thread_id: '42' } }
   )

@@ -21,40 +21,6 @@ core.debug(
   })}`
 )
 
-export async function getRepoStructure(
-  path = '',
-  ref: string | undefined = undefined
-): Promise<string> {
-  try {
-    const { data: contents } = await octokit.repos.getContent({
-      owner,
-      repo,
-      path,
-      ref
-    })
-
-    let markdownStructure = ''
-    if (Array.isArray(contents)) {
-      for (const item of contents) {
-        const indentLevel = path.split('/').length - 1
-        const indent = '  '.repeat(indentLevel)
-
-        if (item.type === 'dir') {
-          markdownStructure += `${indent}- 📁 **${item.name}**\n`
-          // Recursively get contents of the folder
-          markdownStructure += await getRepoStructure(item.path)
-        } else if (item.type === 'file') {
-          markdownStructure += `${indent}- 📄 ${item.name}\n`
-        }
-      }
-    }
-    return markdownStructure
-  } catch (error) {
-    core.debug(`[github.ts] - getRepoStructure: ${(error as Error).message}`)
-    return ''
-  }
-}
-
 export async function getLocalRepoStructure(
   dirPath: string,
   currentPath = ''
@@ -108,34 +74,6 @@ export async function getFileContent(path: string): Promise<string> {
   return response.data.toString()
 }
 
-export async function getFilesContent(paths: string[]): Promise<string> {
-  core.debug(`[github.ts] - getFileContent - path:${path}`)
-
-  let contents = ''
-
-  for (let i = 0; i < paths.length; i++) {
-    const path = paths[i]
-
-    const response = await octokit.repos.getContent({
-      owner,
-      repo,
-      path,
-      ref: context.payload.pull_request!.head.ref,
-      mediaType: {
-        format: 'raw'
-      }
-    })
-
-    contents += `==================== ${path} ====================
-${response.data.toString()}
-========================================\n`
-  }
-
-  core.debug(`[github.ts] - getFilesContent - ${JSON.stringify(contents)}`)
-
-  return contents
-}
-
 export async function getReadme(): Promise<string> {
   const response = await octokit.repos.getReadme({
     owner,
@@ -152,40 +90,6 @@ export async function getReadme(): Promise<string> {
 
 export function shouldReview(): boolean {
   return context.payload.pull_request === undefined
-}
-
-export async function commentOnPullRequest(
-  comment: string,
-  path: string,
-  position: number
-): Promise<void> {
-  core.info(
-    `Commenting on pull request. Path: ${path}, Position: ${position}, Comment: ${comment}`
-  )
-
-  const prDetails = await octokit.pulls.get({ owner, repo, pull_number })
-
-  try {
-    await octokit.pulls.createReviewComment({
-      owner,
-      repo,
-      pull_number,
-      body: comment,
-      commit_id: prDetails.data.head.sha,
-      path,
-      position
-    })
-  } catch (error) {
-    core.debug(
-      `[github.ts] - commentOnPullRequest: Err: ${(error as Error).message}. Args: ${JSON.stringify(
-        {
-          comment,
-          path,
-          position
-        }
-      )}`
-    )
-  }
 }
 
 export async function submitReview(
@@ -207,42 +111,15 @@ export async function submitReview(
   })
 }
 
-type AsyncFunctionReturnType = ReturnType<typeof octokit.pulls.listFiles>
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+export async function getListFiles() {
+  const listFiles = await octokit.pulls.listFiles({
+    owner,
+    repo,
+    pull_number
+  })
 
-type ListChangeType = Awaited<AsyncFunctionReturnType>
-
-let listChangesCache: ListChangeType | undefined = undefined
-
-export async function getFileChangePatch(path: string): Promise<string> {
-  if (listChangesCache) {
-    return (
-      listChangesCache.data.find(change => change.filename === path)?.patch ||
-      'NOT_FOUND'
-    )
-  }
-
-  return 'NOT_FOUND'
-}
-
-export async function getFilesChangePatch(paths: string[]): Promise<string> {
-  let contents = ''
-
-  if (listChangesCache) {
-    for (let i = 0; i < paths.length; i++) {
-      const path = paths[i]
-      const patch = listChangesCache.data.find(
-        change => change.filename === path
-      )?.patch
-
-      contents += `==================== ${path} ====================
-${patch || 'NOT_FOUND'}
-========================================\n`
-    }
-  } else {
-    return 'NOT_FOUND'
-  }
-
-  return contents
+  return listFiles.data
 }
 
 export async function getPullRequestContext(): Promise<string> {
@@ -259,7 +136,7 @@ export async function getPullRequestContext(): Promise<string> {
 
   const prDetails = await octokit.pulls.get({ owner, repo, pull_number })
 
-  listChangesCache = await octokit.pulls.listFiles({
+  const listFiles = await octokit.pulls.listFiles({
     owner,
     repo,
     pull_number
@@ -292,8 +169,12 @@ Mergeable: ${prDetails.data.mergeable ? 'YES' : 'NO'}
 Mergeable State: ${prDetails.data.mergeable_state}
 Changed Files: ${prDetails.data.changed_files}
 ===================================================
-==================== Pull Request Changes Path ====================
-${listChangesCache.data.map(change => `- Path: ${change.filename}\n`)}
+==================== Pull Request Changes Patches ====================
+${listFiles.data.map(
+  file => `--- ${path} ---
+${(file.patch || '').substring(0, 1000)}
+------\n`
+)}
 ===================================================
 ==================== Pull Request Reviews ====================
 ${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}\n`)}
