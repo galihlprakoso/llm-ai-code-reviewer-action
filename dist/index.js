@@ -52495,7 +52495,6 @@ async function callKnowledgeBaseGathererAgent(state) {
     const model = getModel();
     const modelWithTools = model.bindTools(llm_tools_1.knowledgeBaseTools);
     const response = await modelWithTools.invoke([
-        ...state.messages,
         new messages_1.SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to gather additional knowledge needed
 based on given informations given by previous AI agent (previous agent was doing input analysis: understanding the repository and pull request information). You should use given tools to gather all knowledge that will be passed to next agent. You will need to gather knowledge for each of this topic based on given information by previous agent:
 - Design Pattern Guide
@@ -52505,7 +52504,8 @@ based on given informations given by previous AI agent (previous agent was doing
 You are an agent that only can call these tools:
 - tavily_search_results_json
 - wikipedia-api
-- stackexchange`)
+- stackexchange`),
+        ...state.messages
     ]);
     return { messages: [response] };
 }
@@ -52513,11 +52513,11 @@ async function callFileSelectorAgent(state) {
     const model = getModel();
     const modelWithTools = model.bindTools(llm_tools_1.fileSelecterAgentTools);
     const response = await modelWithTools.invoke([
-        ...state.messages,
         new messages_1.SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed.
-Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
-You can utilize available tools to gather more information about specific file you interested. You are an agent that only can call these tools:
-- get_files_changes_patch`)
+      Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
+      You can utilize available tools to gather more information about specific file you interested. You are an agent that only can call these tools:
+      - get_files_changes_patch`),
+        ...state.messages
     ]);
     return { messages: [response] };
 }
@@ -52539,9 +52539,9 @@ async function callReviewCommentAgentNode(state) {
             .describe('Array of review comments.')
     }));
     const response = await modelWithStructuredOutput.invoke([
-        ...state.messages,
         new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review comments based on given informations provided by previous agents' conversations.
-You should give me list of review comments in a structured output.`)
+You should give me list of review comments in a structured output. You cannot call tools.`),
+        ...state.messages
     ]);
     return { comments: response.comments };
 }
@@ -52554,9 +52554,9 @@ async function callReviewSummaryAgentNode(state) {
             .describe('The review action you want to perform. The review actions include: APPROVE, REQUEST_CHANGES, or COMMENT.')
     }));
     const response = await modelWithStructuredOutput.invoke([
-        ...state.messages,
         new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review summary and define review action type based on given informations provided by previous agents' conversations.
-You must create review summary, and decide the review action type.`)
+You must create review summary, and decide the review action type. You cannot call tools.`),
+        ...state.messages
     ]);
     await (0, github_1.submitReview)(response.review_summary, state.comments, response.review_action);
     return { messages: [] };
