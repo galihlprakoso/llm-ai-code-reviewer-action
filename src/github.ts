@@ -30,7 +30,7 @@ export async function getRepoStructure(
       owner,
       repo,
       path,
-      ref
+      ref,
     })
 
     let markdownStructure = ''
@@ -91,7 +91,9 @@ export async function getLocalRepoStructure(
 }
 
 export async function getFileContent(path: string): Promise<string> {
-  const { data: content } = await octokit.repos.getContent({
+  core.debug(`[github.ts] - getFileContent - path:${path}`)
+
+  const response = await octokit.repos.getContent({
     owner,
     repo,
     path,
@@ -101,23 +103,23 @@ export async function getFileContent(path: string): Promise<string> {
     }
   })
 
-  return content.toString()
+  core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
+
+  return response.data.toString()
 }
 
 export async function getReadme(): Promise<string> {
-  try {
-    const { data: readmeData } = await octokit.repos.getReadme({
-      owner,
-      repo,
-      mediaType: {
-        format: 'raw'
-      }
-    })
+  const response = await octokit.repos.getReadme({
+    owner,
+    repo,
+    mediaType: {
+      format: 'raw'
+    }
+  })
 
-    return readmeData.toString()
-  } catch {
-    return ''
-  }
+  core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`)
+
+  return response.data.toString()
 }
 
 export function shouldReview(): boolean {
