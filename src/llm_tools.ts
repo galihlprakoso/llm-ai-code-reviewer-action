@@ -18,17 +18,17 @@ const TAVILY_API_KEY = core.getInput('TAVILY_API_KEY', {
 const getFilesContentTool = tool(
   async ({ paths }) => {
     try {
-      core.debug(`[get_files_content]: called!`)
+      core.debug(`[get_files_full_content]: called!`)
 
       const fileContent = await getFilesContent(paths)
 
       core.debug(
-        `[get_file_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`
+        `[get_files_full_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`
       )
       return fileContent
     } catch (err) {
       core.debug(
-        `[get_file_content]: ${TOOL_RESPONSE_FAILED}. fileContent: ${(err as Error).message}`
+        `[get_files_full_content]: ${TOOL_RESPONSE_FAILED}. fileContent: ${(err as Error).message}`
       )
       return 'NOT_FOUND'
     }
