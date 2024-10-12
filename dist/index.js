@@ -52468,6 +52468,10 @@ _state) {
     const pullRequestContext = await (0, github_1.getPullRequestContext)();
     const model = getModel();
     const modelWithTools = model.bindTools(llm_tools_1.analysisTools);
+    const humanMessage = new messages_1.HumanMessage(`# Codebase High Overview Description
+    ${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
+    # Repository and Pull Request Information
+    ${pullRequestContext}`);
     const response = await modelWithTools.invoke([
         new messages_1.SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to answer these questions under two sections based on given repository informations:
   - Understanding given repository information (e.g README file, folder structure, etc.)
@@ -52484,12 +52488,9 @@ _state) {
 
 You can use available tools to enrich your answer to those questions. You are an agent that only can call these tools:
 - get_files_full_content`),
-        new messages_1.HumanMessage(`# Codebase High Overview Description
-${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
-# Repository and Pull Request Information
-${pullRequestContext}`)
+        humanMessage
     ]);
-    return { messages: [response] };
+    return { messages: [humanMessage, response] };
 }
 async function callKnowledgeBaseGathererAgent(state) {
     core.info('[LLM] - Gathering knowledge base...');
@@ -52514,10 +52515,9 @@ async function callFileSelectorAgent(state) {
     const model = getModel();
     const modelWithTools = model.bindTools(llm_tools_1.fileSelecterAgentTools);
     const response = await modelWithTools.invoke([
-        new messages_1.SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed.
+        new messages_1.SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed from given pull request context form previous chats from Human.
       Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
-      You can utilize available tools to gather more information about specific file you interested. You are an agent that only can call these tools:
-      - get_files_changes_patch`),
+      You should call the "get_files_changes_patch" and pass the paths of the files that's need to be reviewed.`),
         ...state.messages
     ]);
     return { messages: [response] };

@@ -93,7 +93,7 @@ async function callInputUnderstandingAgent(
   _state: typeof StateAnnotation.State
 ): Promise<
   | {
-      messages: AIMessageChunk[]
+      messages: BaseMessage[]
     }
   | undefined
 > {
@@ -103,6 +103,11 @@ async function callInputUnderstandingAgent(
 
   const model = getModel()
   const modelWithTools = model.bindTools!(analysisTools)
+
+  const humanMessage = new HumanMessage(`# Codebase High Overview Description
+    ${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
+    # Repository and Pull Request Information
+    ${pullRequestContext}`)
 
   const response = await modelWithTools.invoke([
     new SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to answer these questions under two sections based on given repository informations:
@@ -120,13 +125,10 @@ async function callInputUnderstandingAgent(
 
 You can use available tools to enrich your answer to those questions. You are an agent that only can call these tools:
 - get_files_full_content`),
-    new HumanMessage(`# Codebase High Overview Description
-${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
-# Repository and Pull Request Information
-${pullRequestContext}`)
+    humanMessage
   ])
 
-  return { messages: [response] }
+  return { messages: [humanMessage, response] }
 }
 
 async function callKnowledgeBaseGathererAgent(
@@ -171,10 +173,9 @@ async function callFileSelectorAgent(
   const modelWithTools = model.bindTools!(fileSelecterAgentTools)
 
   const response = await modelWithTools.invoke([
-    new SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed.
+    new SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed from given pull request context form previous chats from Human.
       Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
-      You can utilize available tools to gather more information about specific file you interested. You are an agent that only can call these tools:
-      - get_files_changes_patch`),
+      You should call the "get_files_changes_patch" and pass the paths of the files that's need to be reviewed.`),
     ...state.messages
   ])
 
