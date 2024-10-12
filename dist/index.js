@@ -52124,14 +52124,12 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getRepoStructure = getRepoStructure;
 exports.getLocalRepoStructure = getLocalRepoStructure;
 exports.getFileContent = getFileContent;
 exports.getReadme = getReadme;
 exports.shouldReview = shouldReview;
-exports.commentOnPullRequest = commentOnPullRequest;
 exports.submitReview = submitReview;
-exports.getFileChangePatch = getFileChangePatch;
+exports.getListFiles = getListFiles;
 exports.getPullRequestContext = getPullRequestContext;
 const core = __importStar(__nccwpck_require__(42186));
 const github = __importStar(__nccwpck_require__(95438));
@@ -52149,36 +52147,6 @@ core.debug(`[github.ts] - context: ${JSON.stringify({
     repo,
     pull_number
 })}`);
-async function getRepoStructure(path = '', ref = undefined) {
-    try {
-        const { data: contents } = await octokit.repos.getContent({
-            owner,
-            repo,
-            path,
-            ref
-        });
-        let markdownStructure = '';
-        if (Array.isArray(contents)) {
-            for (const item of contents) {
-                const indentLevel = path.split('/').length - 1;
-                const indent = '  '.repeat(indentLevel);
-                if (item.type === 'dir') {
-                    markdownStructure += `${indent}- 📁 **${item.name}**\n`;
-                    // Recursively get contents of the folder
-                    markdownStructure += await getRepoStructure(item.path);
-                }
-                else if (item.type === 'file') {
-                    markdownStructure += `${indent}- 📄 ${item.name}\n`;
-                }
-            }
-        }
-        return markdownStructure;
-    }
-    catch (error) {
-        core.debug(`[github.ts] - getRepoStructure: ${error.message}`);
-        return '';
-    }
-}
 async function getLocalRepoStructure(dirPath, currentPath = '') {
     let markdownStructure = '';
     try {
@@ -52204,7 +52172,8 @@ async function getLocalRepoStructure(dirPath, currentPath = '') {
     return markdownStructure;
 }
 async function getFileContent(path) {
-    const { data: contents } = await octokit.repos.getContent({
+    core.debug(`[github.ts] - getFileContent - path:${path}`);
+    const response = await octokit.repos.getContent({
         owner,
         repo,
         path,
@@ -52213,50 +52182,22 @@ async function getFileContent(path) {
             format: 'raw'
         }
     });
-    if (Array.isArray(contents) && contents.length > 0) {
-        return contents[0].content || '';
-    }
-    return '';
+    core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`);
+    return response.data.toString();
 }
 async function getReadme() {
-    try {
-        const { data: readmeData } = await octokit.repos.getReadme({
-            owner,
-            repo,
-            mediaType: {
-                format: 'raw'
-            }
-        });
-        return readmeData.content || '';
-    }
-    catch {
-        return '';
-    }
+    const response = await octokit.repos.getReadme({
+        owner,
+        repo,
+        mediaType: {
+            format: 'raw'
+        }
+    });
+    core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`);
+    return response.data.toString();
 }
 function shouldReview() {
     return context.payload.pull_request === undefined;
-}
-async function commentOnPullRequest(comment, path, position) {
-    core.info(`Commenting on pull request. Path: ${path}, Position: ${position}, Comment: ${comment}`);
-    const prDetails = await octokit.pulls.get({ owner, repo, pull_number });
-    try {
-        await octokit.pulls.createReviewComment({
-            owner,
-            repo,
-            pull_number,
-            body: comment,
-            commit_id: prDetails.data.head.sha,
-            path,
-            position
-        });
-    }
-    catch (error) {
-        core.debug(`[github.ts] - commentOnPullRequest: Err: ${error.message}. Args: ${JSON.stringify({
-            comment,
-            path,
-            position
-        })}`);
-    }
 }
 async function submitReview(review_summary, comments, action) {
     await octokit.pulls.createReview({
@@ -52272,13 +52213,14 @@ async function submitReview(review_summary, comments, action) {
         event: action
     });
 }
-let listChangesCache = undefined;
-async function getFileChangePatch(path) {
-    if (listChangesCache) {
-        return (listChangesCache.data.find(change => change.filename === path)?.patch ||
-            'NOT_FOUND');
-    }
-    return 'NOT_FOUND';
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+async function getListFiles() {
+    const listFiles = await octokit.pulls.listFiles({
+        owner,
+        repo,
+        pull_number
+    });
+    return listFiles.data;
 }
 async function getPullRequestContext() {
     const readme = await getReadme();
@@ -52286,7 +52228,7 @@ async function getPullRequestContext() {
     const headRefFolderStructure = await getLocalRepoStructure(GITHUB_WORKSPACE, context.payload.pull_request.head.ref);
     core.debug(`[headRefFolderStructure] - ${headRefFolderStructure}`);
     const prDetails = await octokit.pulls.get({ owner, repo, pull_number });
-    listChangesCache = await octokit.pulls.listFiles({
+    const listFiles = await octokit.pulls.listFiles({
         owner,
         repo,
         pull_number
@@ -52315,8 +52257,10 @@ Mergeable: ${prDetails.data.mergeable ? 'YES' : 'NO'}
 Mergeable State: ${prDetails.data.mergeable_state}
 Changed Files: ${prDetails.data.changed_files}
 ===================================================
-==================== Pull Request Changes Path ====================
-${listChangesCache.data.map(change => `- Path: ${change.filename}\n`)}
+==================== Pull Request Changes Patches ====================
+${listFiles.data.map(file => `--- ${path} ---
+${(file.patch || '').substring(0, 1000)}
+------\n`)}
 ===================================================
 ==================== Pull Request Reviews ====================
 ${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}\n`)}
@@ -52368,7 +52312,9 @@ const google_genai_1 = __nccwpck_require__(11789);
 const process_1 = __nccwpck_require__(77282);
 const github_1 = __nccwpck_require__(70978);
 const zod_1 = __nccwpck_require__(63301);
+const tools_1 = __nccwpck_require__(53173);
 const llm_tools_1 = __nccwpck_require__(71573);
+const utils_1 = __nccwpck_require__(71314);
 const AI_PROVIDER = core.getInput('ai_provider', {
     required: true,
     trimWhitespace: true
@@ -52391,10 +52337,14 @@ const GROQ_API_KEY = core.getInput('GROQ_API_KEY', {
 });
 const AI_PROVIDER_GROQ = 'GROQ';
 const AI_PROVIDER_GEMINI = 'GEMINI';
+const FILE_CHANGES_PATCH_TEXT_LIMIT = 10000;
+const FULL_SOURCE_CODE_TEXT_LIMIT = 10000;
 const StateAnnotation = langgraph_2.Annotation.Root({
     messages: (0, langgraph_2.Annotation)({
         reducer: (x, y) => x.concat(y),
-        default: () => []
+        default: () => [
+            new messages_1.SystemMessage('You are an AI Assistant that help human to do code review. Please follow instructions given by Human.')
+        ]
     }),
     comments: (0, langgraph_2.Annotation)({
         reducer: (x, y) => x.concat(y),
@@ -52426,146 +52376,136 @@ function getModel() {
     }
     return model;
 }
-async function callInputUnderstandingAgent(
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function inputUnderstandingAgentNode(
+// eslint-disable-next-line
 _state) {
     core.info('[LLM] - Understanding the input...');
     const pullRequestContext = await (0, github_1.getPullRequestContext)();
     const model = getModel();
-    const modelWithTools = model.bindTools(llm_tools_1.analysisTools);
-    const response = await modelWithTools.invoke([
-        new messages_1.SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to answer these questions under two sections based on given repository informations:
-  - Understanding given repository information (e.g README file, folder structure, etc.)
-    - What framework is used?
-    - What kind of coding styles are used?
-    - What design patterns are used?
-  - Understanding given pull request information
-    - What's the intention of the pull request?
-    - What kind of changes introduced in this pull request?
-    - What's the impact of this pull request?
-  - Understanding the business / domain logic context?
-    - What's the high overview of the business / domain in this repository?
-    - What's the high overview about the business / domain logic?
+    const response = await model.invoke([
+        new messages_1.HumanMessage(`Please answer these questions under two sections based on given repository informations:
+- Understanding given repository information (e.g README file, folder structure, etc.)
+- What framework is used?
+- What kind of coding styles are used?
+- What design patterns are used?
+- Understanding given pull request information
+- What's the intention of the pull request?
+- What kind of changes introduced in this pull request?
+- What's the impact of this pull request?
+- Understanding the business / domain logic context?
+- What's the high overview of the business / domain in this repository?
+- What's the high overview about the business / domain logic?
 
-You can use available tools to enrich your answer to those questions.`),
-        new messages_1.HumanMessage(`# Codebase High Overview Description
+# Codebase High Overview Description
 ${CODEBASE_HIGH_OVERVIEW_DESCRIPTION}
 # Repository and Pull Request Information
 ${pullRequestContext}`)
     ]);
     return { messages: [response] };
 }
-async function callKnowledgeBaseGathererAgent(state) {
-    core.info('[LLM] - Gathering knowledge base...');
+async function knowledgeUpdatesAgentNode(state) {
     const model = getModel();
     const modelWithTools = model.bindTools(llm_tools_1.knowledgeBaseTools);
     const response = await modelWithTools.invoke([
-        new messages_1.SystemMessage(`You are an AI Agent that help human to do code review, you are one of the agents that have a task to gather additional knowledge needed
-based on given informations given by previous AI agent (previous agent was doing input analysis: understanding the repository and pull request information). You should use given tools to gather all knowledge that will be passed to next agent. You will need to gather knowledge for each of this topic based on given information by previous agent:
-- Design Pattern Guide
-- Coding Style Guide
-- Business / Domain Knowledge Guide`),
-        ...state.messages
+        ...state.messages,
+        new messages_1.HumanMessage(`Based on given high overview information about the pull request, please gather needed knowledge updates from the internet by using given tools
+(e.g latest library versions, framework updates, best practices, concepts, etc.)`)
     ]);
     return { messages: [response] };
 }
-async function callFileSelectorAgent(state) {
+async function reviewCommentsAgentNode(state) {
+    const outputSchema = zod_1.z.object({
+        comment: zod_1.z.string().describe('Your comment to specific file and position.'),
+        position: zod_1.z
+            .number()
+            .describe('The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.')
+    });
     const model = getModel();
-    const modelWithTools = model.bindTools(llm_tools_1.fileSelecterAgentTools);
-    const response = await modelWithTools.invoke([
-        new messages_1.SystemMessage(`You are an AI agent that help human to review code, you are one of agents that have specific task which is to select interesting file to be reviewed.
-Don't choose file that's impossible to review (image file, dist generated file, node_modules file, blob, or any other non-reviewable and non-code files.)
-You can utilize these available tools to gather more information about specific file you interested:
-- "get_file_changes_patch" - this tool will give you diff changes between source and target branch for the specific file.
-- "get_file_full_content" - when patch is not enough, you can also use this tool to get full content of that file.`),
-        ...state.messages
-    ]);
-    return { messages: [response] };
+    const finalResponseTool = (0, tools_1.tool)(async () => '', {
+        name: 'response',
+        description: 'Always respond to the user using this tool.',
+        schema: outputSchema
+    });
+    const modelWithStructuredOutput = model.bindTools([finalResponseTool]);
+    const listFiles = await (0, github_1.getListFiles)();
+    const comments = [];
+    for (let i = 0; i < listFiles.length; i++) {
+        const listFile = listFiles[i];
+        const fullFileContent = await (0, github_1.getFileContent)(listFile.filename);
+        const response = await modelWithStructuredOutput.invoke([
+            ...state.messages,
+            new messages_1.HumanMessage(`Based on given informations from previous chats / messages, and given information below, please create code review comment. You must call "response" tool to give review,
+except the file doesn't need to be reviewed (dist files, generated files, and any other files that don't need to be reviewed.) or the file is already good, no need to comment, lgtm,, in that case, just don't call the tool.
+Filename: ${listFile.filename}
+Previous Filename: ${listFile.previous_filename}
+============== Changes Patch ==============
+${listFile.patch?.substring(0, FILE_CHANGES_PATCH_TEXT_LIMIT) || ''}
+===================================
+============ Full Source Code =============
+${fullFileContent.substring(0, FULL_SOURCE_CODE_TEXT_LIMIT)}
+===========================================`)
+        ]);
+        if (response.tool_calls?.length) {
+            const tool_call_args = response.tool_calls[0].args;
+            comments.push({
+                comment: tool_call_args.comment,
+                position: tool_call_args.position,
+                path: listFile.filename
+            });
+        }
+        await (0, utils_1.wait)(1000);
+    }
+    return { comments };
 }
-async function callReviewCommentAgentNode(state) {
-    const model = getModel();
-    const modelWithStructuredOutput = model.withStructuredOutput(zod_1.z.object({
-        comments: zod_1.z
-            .array(zod_1.z.object({
-            comment: zod_1.z
-                .string()
-                .describe('Your comment to specific file and position.'),
-            path: zod_1.z
-                .string()
-                .describe('Path to file (e.g <folder name>/<file name>.<file extension>'),
-            position: zod_1.z
-                .number()
-                .describe('The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.')
-        }))
-            .describe('Array of review comments.')
-    }));
-    const response = await modelWithStructuredOutput.invoke([
-        new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review comments based on given informations provided by previous agents' conversations.
-You should give me list of review comments in a structured output.`),
-        ...state.messages
-    ]);
-    return { comments: response.comments };
-}
-async function callReviewSummaryAgentNode(state) {
-    const model = getModel();
-    const modelWithStructuredOutput = model.withStructuredOutput(zod_1.z.object({
+async function reviewSummaryAgentNode(state) {
+    const outputSchema = zod_1.z.object({
         review_summary: zod_1.z.string().describe('Your PR Review summarization.'),
         review_action: zod_1.z
             .enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT'])
             .describe('The review action you want to perform. The review actions include: APPROVE, REQUEST_CHANGES, or COMMENT.')
-    }));
+    });
+    const finalResponseTool = (0, tools_1.tool)(async () => '', {
+        name: 'response',
+        description: 'Always respond to the user using this tool.',
+        schema: outputSchema
+    });
+    const model = getModel();
+    const modelWithStructuredOutput = model.bindTools([finalResponseTool]);
     const response = await modelWithStructuredOutput.invoke([
-        new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review summary and define review action type based on given informations provided by previous agents' conversations.
-You must create review summary, and decide the review action type.`),
-        ...state.messages
+        ...state.messages,
+        new messages_1.HumanMessage(`Please create review summary and define review action type based on given informations provided by previous conversations and given review comments.
+You must create review summary, and decide the review action type. You should call "response" tool to give review summary.
+
+Review Comments:
+${state.comments.map((comment, idx) => `=========== ${idx + 1} ===========
+Filename: ${comment.path}
+Position: ${comment.position}
+Review Comment: ${comment.comment}
+=========================`)}`)
     ]);
-    await (0, github_1.submitReview)(response.review_summary, state.comments, response.review_action);
+    if (response.tool_calls?.length) {
+        const tool_call_args = response.tool_calls[0].args;
+        await (0, github_1.submitReview)(tool_call_args.review_summary, state.comments, tool_call_args.review_action);
+    }
     return { messages: [] };
 }
 const workflow = new langgraph_1.StateGraph(StateAnnotation)
-    .addNode('input_understanding_agent', callInputUnderstandingAgent)
-    .addNode('analysis_tools', llm_tools_1.analysisToolsNode)
+    .addNode('input_understanding_agent_node', inputUnderstandingAgentNode)
+    .addNode('knowledge_updates_agent_node', knowledgeUpdatesAgentNode)
     .addNode('knowledge_base_tools', llm_tools_1.knowledgeBaseToolsNode)
-    .addNode('file_selector_agent_tools', llm_tools_1.fileSelecterAgentToolsNode)
-    .addNode('knowledge_base_gatherer_agent', callKnowledgeBaseGathererAgent)
-    .addNode('file_selector_agent', callFileSelectorAgent)
-    .addNode('code_review_comment_agent', callReviewCommentAgentNode)
-    .addNode('code_review_summary_agent', callReviewSummaryAgentNode)
-    .addEdge(langgraph_1.START, 'input_understanding_agent')
-    .addConditionalEdges('input_understanding_agent', (state) => {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
-        return 'analysis_tools';
-    }
-    return 'knowledge_base_gatherer_agent';
-})
-    .addEdge('analysis_tools', 'input_understanding_agent')
-    .addConditionalEdges('knowledge_base_gatherer_agent', (state) => {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
-        return 'knowledge_base_tools';
-    }
-    return 'file_selector_agent';
-})
-    .addEdge('knowledge_base_tools', 'knowledge_base_gatherer_agent')
-    .addConditionalEdges('file_selector_agent', (state) => {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
-        return 'file_selector_agent_tools';
-    }
-    return 'code_review_comment_agent';
-})
-    .addEdge('file_selector_agent_tools', 'file_selector_agent')
-    .addEdge('code_review_comment_agent', 'code_review_summary_agent')
-    .addEdge('code_review_summary_agent', langgraph_1.END);
+    .addNode('review_comments_agent_node', reviewCommentsAgentNode)
+    .addNode('review_summary_agent_node', reviewSummaryAgentNode)
+    .addEdge(langgraph_1.START, 'input_understanding_agent_node')
+    .addEdge('input_understanding_agent_node', 'knowledge_updates_agent_node')
+    .addEdge('knowledge_updates_agent_node', 'knowledge_base_tools')
+    .addEdge('knowledge_base_tools', 'review_comments_agent_node')
+    .addEdge('review_comments_agent_node', 'review_summary_agent_node')
+    .addEdge('review_summary_agent_node', langgraph_1.END);
 const checkpointer = new langgraph_2.MemorySaver();
 const graph = workflow.compile({ checkpointer });
 async function reviewPullRequest() {
     await graph.invoke({
-        messages: [new messages_1.HumanMessage('Please review my pull request.')]
+        messages: []
     }, { configurable: { thread_id: '42' } });
 }
 
@@ -52601,60 +52541,15 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.fileSelecterAgentToolsNode = exports.knowledgeBaseToolsNode = exports.analysisToolsNode = exports.fileSelecterAgentTools = exports.knowledgeBaseTools = exports.analysisTools = void 0;
+exports.knowledgeBaseToolsNode = exports.knowledgeBaseTools = void 0;
 const tavily_search_1 = __nccwpck_require__(16033);
 const stackexchange_1 = __nccwpck_require__(53199);
 const wikipedia_query_run_1 = __nccwpck_require__(87079);
-const github_1 = __nccwpck_require__(70978);
 const prebuilt_1 = __nccwpck_require__(26773);
-const tools_1 = __nccwpck_require__(53173);
-const zod_1 = __nccwpck_require__(63301);
 const core = __importStar(__nccwpck_require__(42186));
-const TOOL_RESPONSE_SUCCESS = 'SUCCESS';
-const TOOL_RESPONSE_FAILED = 'FAILED';
 const TAVILY_API_KEY = core.getInput('TAVILY_API_KEY', {
     required: false,
     trimWhitespace: true
-});
-const getFileContentTool = (0, tools_1.tool)(async ({ path }) => {
-    try {
-        core.debug(`[get_file_content]: called!`);
-        const fileContent = await (0, github_1.getFileContent)(path);
-        core.debug(`[get_file_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`);
-        return fileContent;
-    }
-    catch (err) {
-        core.debug(`[get_file_content]: ${TOOL_RESPONSE_FAILED}. fileContent: ${err.message}`);
-        return 'NOT_FOUND';
-    }
-}, {
-    name: 'get_file_full_content',
-    description: 'Call to get the content of specific file in the source branch to enrich your decision before reviewing specific line on that file. It will return NOT_FOUND if the file is not exists.',
-    schema: zod_1.z.object({
-        path: zod_1.z
-            .string()
-            .describe('Path to file (e.g <folder name>/<file name>.<file extension>')
-    })
-});
-const getFileChangesPatchTool = (0, tools_1.tool)(async ({ path }) => {
-    try {
-        core.debug(`[get_file_content]: called!`);
-        const fileContent = await (0, github_1.getFileChangePatch)(path);
-        core.debug(`[get_file_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`);
-        return fileContent;
-    }
-    catch (err) {
-        core.debug(`[get_file_content]: ${TOOL_RESPONSE_FAILED}. fileContent: ${err.message}`);
-        return 'NOT_FOUND';
-    }
-}, {
-    name: 'get_file_changes_patch',
-    description: "Call to get the patch of specific file that describe it's differences between source and target branch.",
-    schema: zod_1.z.object({
-        path: zod_1.z
-            .string()
-            .describe('Path to file (e.g <folder name>/<file name>.<file extension>')
-    })
 });
 const tavilySearchToolArr = TAVILY_API_KEY
     ? [new tavily_search_1.TavilySearchResults({ maxResults: 3, apiKey: TAVILY_API_KEY })]
@@ -52666,25 +52561,12 @@ const wikipediaQueryRunTool = new wikipedia_query_run_1.WikipediaQueryRun({
     topKResults: 3,
     maxDocContentLength: 4000
 });
-exports.analysisTools = [
-    getFileContentTool,
-    ...tavilySearchToolArr,
-    wikipediaQueryRunTool,
-    stackExchangeTitleTool
-];
 exports.knowledgeBaseTools = [
-    getFileContentTool,
     ...tavilySearchToolArr,
     wikipediaQueryRunTool,
     stackExchangeTitleTool
 ];
-exports.fileSelecterAgentTools = [
-    getFileChangesPatchTool,
-    getFileContentTool
-];
-exports.analysisToolsNode = new prebuilt_1.ToolNode(exports.analysisTools);
 exports.knowledgeBaseToolsNode = new prebuilt_1.ToolNode(exports.knowledgeBaseTools);
-exports.fileSelecterAgentToolsNode = new prebuilt_1.ToolNode(exports.fileSelecterAgentTools);
 
 
 /***/ }),
@@ -52733,6 +52615,20 @@ async function run() {
     catch (error) {
         core.setFailed(error.message);
     }
+}
+
+
+/***/ }),
+
+/***/ 71314:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.wait = wait;
+async function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
