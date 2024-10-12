@@ -22,6 +22,7 @@ import {
   fileSelecterAgentToolsNode
 } from './llm_tools'
 import { PullRequestReviewComment } from './types'
+import { tool } from '@langchain/core/tools'
 
 const AI_PROVIDER = core.getInput('ai_provider', {
   required: true,
@@ -188,30 +189,34 @@ async function callReviewCommentAgentNode(
     }
   | undefined
 > {
+  const outputSchema = z.object({
+    comments: z
+      .array(
+        z.object({
+          comment: z
+            .string()
+            .describe('Your comment to specific file and position.'),
+          path: z
+            .string()
+            .describe(
+              'Path to file (e.g <folder name>/<file name>.<file extension>'
+            ),
+          position: z
+            .number()
+            .describe(
+              'The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.'
+            )
+        })
+      )
+      .describe('Array of review comments.')
+  })
   const model = getModel()
-  const modelWithStructuredOutput = model.withStructuredOutput(
-    z.object({
-      comments: z
-        .array(
-          z.object({
-            comment: z
-              .string()
-              .describe('Your comment to specific file and position.'),
-            path: z
-              .string()
-              .describe(
-                'Path to file (e.g <folder name>/<file name>.<file extension>'
-              ),
-            position: z
-              .number()
-              .describe(
-                'The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.'
-              )
-          })
-        )
-        .describe('Array of review comments.')
-    })
-  )
+  const finalResponseTool = tool(async () => '', {
+    name: 'response',
+    description: 'Always respond to the user using this tool.',
+    schema: outputSchema
+  })
+  const modelWithStructuredOutput = model.bindTools!([finalResponseTool])
 
   const response = await modelWithStructuredOutput.invoke([
     new SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review comments based on given informations provided by previous agents' conversations.
@@ -219,7 +224,12 @@ You should give me list of review comments in a structured output. You cannot ca
     ...state.messages
   ])
 
-  return { comments: response.comments }
+  if (response.tool_calls?.length) {
+    const tool_call_args = response.tool_calls[0].args
+    return { comments: tool_call_args.comments }
+  }
+
+  return { comments: [] }
 }
 
 async function callReviewSummaryAgentNode(
@@ -230,29 +240,37 @@ async function callReviewSummaryAgentNode(
     }
   | undefined
 > {
+  const outputSchema = z.object({
+    review_summary: z.string().describe('Your PR Review summarization.'),
+    review_action: z
+      .enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT'])
+      .describe(
+        'The review action you want to perform. The review actions include: APPROVE, REQUEST_CHANGES, or COMMENT.'
+      )
+  })
+  const finalResponseTool = tool(async () => '', {
+    name: 'response',
+    description: 'Always respond to the user using this tool.',
+    schema: outputSchema
+  })
+
   const model = getModel()
-  const modelWithStructuredOutput = model.withStructuredOutput(
-    z.object({
-      review_summary: z.string().describe('Your PR Review summarization.'),
-      review_action: z
-        .enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT'])
-        .describe(
-          'The review action you want to perform. The review actions include: APPROVE, REQUEST_CHANGES, or COMMENT.'
-        )
-    })
-  )
+  const modelWithStructuredOutput = model.bindTools!([finalResponseTool])
 
   const response = await modelWithStructuredOutput.invoke([
     new SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review summary and define review action type based on given informations provided by previous agents' conversations.
-You must create review summary, and decide the review action type. You cannot call tools.`),
+You must create review summary, and decide the review action type. You can only call "response" tool.`),
     ...state.messages
   ])
 
-  await submitReview(
-    response.review_summary,
-    state.comments,
-    response.review_action
-  )
+  if (response.tool_calls?.length) {
+    const tool_call_args = response.tool_calls[0].args
+    await submitReview(
+      tool_call_args.review_summary,
+      state.comments,
+      tool_call_args.review_action
+    )
+  }
 
   return { messages: [] }
 }

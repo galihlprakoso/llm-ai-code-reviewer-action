@@ -52403,6 +52403,7 @@ const process_1 = __nccwpck_require__(77282);
 const github_1 = __nccwpck_require__(70978);
 const zod_1 = __nccwpck_require__(63301);
 const llm_tools_1 = __nccwpck_require__(71573);
+const tools_1 = __nccwpck_require__(53173);
 const AI_PROVIDER = core.getInput('ai_provider', {
     required: true,
     trimWhitespace: true
@@ -52522,8 +52523,7 @@ async function callFileSelectorAgent(state) {
     return { messages: [response] };
 }
 async function callReviewCommentAgentNode(state) {
-    const model = getModel();
-    const modelWithStructuredOutput = model.withStructuredOutput(zod_1.z.object({
+    const outputSchema = zod_1.z.object({
         comments: zod_1.z
             .array(zod_1.z.object({
             comment: zod_1.z
@@ -52537,28 +52537,48 @@ async function callReviewCommentAgentNode(state) {
                 .describe('The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.')
         }))
             .describe('Array of review comments.')
-    }));
+    });
+    const model = getModel();
+    const finalResponseTool = (0, tools_1.tool)(async () => '', {
+        name: 'response',
+        description: 'Always respond to the user using this tool.',
+        schema: outputSchema
+    });
+    const modelWithStructuredOutput = model.bindTools([finalResponseTool]);
     const response = await modelWithStructuredOutput.invoke([
         new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review comments based on given informations provided by previous agents' conversations.
 You should give me list of review comments in a structured output. You cannot call tools.`),
         ...state.messages
     ]);
-    return { comments: response.comments };
+    if (response.tool_calls?.length) {
+        const tool_call_args = response.tool_calls[0].args;
+        return { comments: tool_call_args.comments };
+    }
+    return { comments: [] };
 }
 async function callReviewSummaryAgentNode(state) {
-    const model = getModel();
-    const modelWithStructuredOutput = model.withStructuredOutput(zod_1.z.object({
+    const outputSchema = zod_1.z.object({
         review_summary: zod_1.z.string().describe('Your PR Review summarization.'),
         review_action: zod_1.z
             .enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT'])
             .describe('The review action you want to perform. The review actions include: APPROVE, REQUEST_CHANGES, or COMMENT.')
-    }));
+    });
+    const finalResponseTool = (0, tools_1.tool)(async () => '', {
+        name: 'response',
+        description: 'Always respond to the user using this tool.',
+        schema: outputSchema
+    });
+    const model = getModel();
+    const modelWithStructuredOutput = model.bindTools([finalResponseTool]);
     const response = await modelWithStructuredOutput.invoke([
         new messages_1.SystemMessage(`You are an AI agent that help human to do code review, you are one of the agents that have task to create review summary and define review action type based on given informations provided by previous agents' conversations.
-You must create review summary, and decide the review action type. You cannot call tools.`),
+You must create review summary, and decide the review action type. You can only call "response" tool.`),
         ...state.messages
     ]);
-    await (0, github_1.submitReview)(response.review_summary, state.comments, response.review_action);
+    if (response.tool_calls?.length) {
+        const tool_call_args = response.tool_calls[0].args;
+        await (0, github_1.submitReview)(tool_call_args.review_summary, state.comments, tool_call_args.review_action);
+    }
     return { messages: [] };
 }
 const workflow = new langgraph_1.StateGraph(StateAnnotation)
