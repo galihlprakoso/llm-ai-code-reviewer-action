@@ -52,6 +52,13 @@ const GROQ_API_KEY = core.getInput('GROQ_API_KEY', {
 const AI_PROVIDER_GROQ = 'GROQ'
 const AI_PROVIDER_GEMINI = 'GEMINI'
 
+const MAX_TOOLS_NODE_RECURSION = parseInt(
+  core.getInput('max_tools_node_recursion', {
+    required: false,
+    trimWhitespace: true
+  }) || '1'
+)
+
 const StateAnnotation = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
     reducer: (x, y) => x.concat(y),
@@ -254,6 +261,12 @@ You must create review summary, and decide the review action type.`),
   return { messages: [] }
 }
 
+const toolCallsMap: Record<string, number> = {
+  'input_understanding_agent:analysis_tools': 0,
+  'knowledge_base_gatherer_agent:knowledge_base_tools': 0,
+  'file_selector_agent:file_selector_agent_tools': 0
+}
+
 const workflow = new StateGraph(StateAnnotation)
   .addNode('input_understanding_agent', callInputUnderstandingAgent)
   .addNode('analysis_tools', analysisToolsNode)
@@ -270,9 +283,16 @@ const workflow = new StateGraph(StateAnnotation)
       const messages = state.messages
       const lastMessage = messages[messages.length - 1] as AIMessage
 
-      if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
+      if (
+        isAIMessage(lastMessage) &&
+        lastMessage.tool_calls?.length &&
+        toolCallsMap['input_understanding_agent:analysis_tools'] <
+          MAX_TOOLS_NODE_RECURSION
+      ) {
+        toolCallsMap['input_understanding_agent:analysis_tools'] += 1
         return 'analysis_tools'
       }
+
       return 'knowledge_base_gatherer_agent'
     }
   )
@@ -283,7 +303,13 @@ const workflow = new StateGraph(StateAnnotation)
       const messages = state.messages
       const lastMessage = messages[messages.length - 1] as AIMessage
 
-      if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
+      if (
+        isAIMessage(lastMessage) &&
+        lastMessage.tool_calls?.length &&
+        toolCallsMap['knowledge_base_gatherer_agent:knowledge_base_tools'] <
+          MAX_TOOLS_NODE_RECURSION
+      ) {
+        toolCallsMap['knowledge_base_gatherer_agent:knowledge_base_tools'] += 1
         return 'knowledge_base_tools'
       }
       return 'file_selector_agent'
@@ -296,7 +322,13 @@ const workflow = new StateGraph(StateAnnotation)
       const messages = state.messages
       const lastMessage = messages[messages.length - 1] as AIMessage
 
-      if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
+      if (
+        isAIMessage(lastMessage) &&
+        lastMessage.tool_calls?.length &&
+        toolCallsMap['file_selector_agent:file_selector_agent_tools'] <
+          MAX_TOOLS_NODE_RECURSION
+      ) {
+        toolCallsMap['file_selector_agent:file_selector_agent_tools'] += 1
         return 'file_selector_agent_tools'
       }
       return 'code_review_comment_agent'
@@ -315,6 +347,6 @@ export async function reviewPullRequest(): Promise<void> {
     {
       messages: [new HumanMessage('Please review my pull request.')]
     },
-    { configurable: { thread_id: '42' }, recursionLimit: 4 }
+    { configurable: { thread_id: '42' } }
   )
 }

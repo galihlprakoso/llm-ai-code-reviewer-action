@@ -52386,6 +52386,10 @@ const GROQ_API_KEY = core.getInput('GROQ_API_KEY', {
 });
 const AI_PROVIDER_GROQ = 'GROQ';
 const AI_PROVIDER_GEMINI = 'GEMINI';
+const MAX_TOOLS_NODE_RECURSION = parseInt(core.getInput('max_tools_node_recursion', {
+    required: false,
+    trimWhitespace: true
+}) || '1');
 const StateAnnotation = langgraph_2.Annotation.Root({
     messages: (0, langgraph_2.Annotation)({
         reducer: (x, y) => x.concat(y),
@@ -52517,6 +52521,11 @@ You must create review summary, and decide the review action type.`),
     await (0, github_1.submitReview)(response.review_summary, state.comments, response.review_action);
     return { messages: [] };
 }
+const toolCallsMap = {
+    'input_understanding_agent:analysis_tools': 0,
+    'knowledge_base_gatherer_agent:knowledge_base_tools': 0,
+    'file_selector_agent:file_selector_agent_tools': 0
+};
 const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addNode('input_understanding_agent', callInputUnderstandingAgent)
     .addNode('analysis_tools', llm_tools_1.analysisToolsNode)
@@ -52530,7 +52539,11 @@ const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addConditionalEdges('input_understanding_agent', (state) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1];
-    if ((0, messages_1.isAIMessage)(lastMessage) && lastMessage.tool_calls?.length) {
+    if ((0, messages_1.isAIMessage)(lastMessage) &&
+        lastMessage.tool_calls?.length &&
+        toolCallsMap['input_understanding_agent:analysis_tools'] <
+            MAX_TOOLS_NODE_RECURSION) {
+        toolCallsMap['input_understanding_agent:analysis_tools'] += 1;
         return 'analysis_tools';
     }
     return 'knowledge_base_gatherer_agent';
@@ -52539,7 +52552,11 @@ const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addConditionalEdges('knowledge_base_gatherer_agent', (state) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1];
-    if ((0, messages_1.isAIMessage)(lastMessage) && lastMessage.tool_calls?.length) {
+    if ((0, messages_1.isAIMessage)(lastMessage) &&
+        lastMessage.tool_calls?.length &&
+        toolCallsMap['knowledge_base_gatherer_agent:knowledge_base_tools'] <
+            MAX_TOOLS_NODE_RECURSION) {
+        toolCallsMap['knowledge_base_gatherer_agent:knowledge_base_tools'] += 1;
         return 'knowledge_base_tools';
     }
     return 'file_selector_agent';
@@ -52548,7 +52565,11 @@ const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addConditionalEdges('file_selector_agent', (state) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1];
-    if ((0, messages_1.isAIMessage)(lastMessage) && lastMessage.tool_calls?.length) {
+    if ((0, messages_1.isAIMessage)(lastMessage) &&
+        lastMessage.tool_calls?.length &&
+        toolCallsMap['file_selector_agent:file_selector_agent_tools'] <
+            MAX_TOOLS_NODE_RECURSION) {
+        toolCallsMap['file_selector_agent:file_selector_agent_tools'] += 1;
         return 'file_selector_agent_tools';
     }
     return 'code_review_comment_agent';
@@ -52561,7 +52582,7 @@ const graph = workflow.compile({ checkpointer });
 async function reviewPullRequest() {
     await graph.invoke({
         messages: [new messages_1.HumanMessage('Please review my pull request.')]
-    }, { configurable: { thread_id: '42' }, recursionLimit: 4 });
+    }, { configurable: { thread_id: '42' } });
 }
 
 
