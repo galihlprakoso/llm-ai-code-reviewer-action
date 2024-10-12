@@ -74,6 +74,9 @@ jobs:
         with:
           ai_provider: 'GROQ'
           ai_provider_model: 'llama-3.1-70b-versatile'
+          codebase_high_overview_descripton:
+            'This repository is an LLM Code Reviewer Github Action that use
+            typescript implemented with functional programming.'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOGLE_GEMINI_API_KEY: <your gemini api key>
           GROQ_API_KEY: <your groq api key>
