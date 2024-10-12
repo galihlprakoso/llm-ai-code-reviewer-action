@@ -68,7 +68,7 @@ jobs:
         uses: ./
         with:
           ai_provider: 'GROQ'
-          ai_provider_model: 'llama3-groq-70b-8192-tool-use-preview'
+          ai_provider_model: 'llama-3.1-8b-instant'
           codebase_high_overview_descripton:
             'This repository is an LLM Code Reviewer Github Action that use
             typescript implemented with functional programming.'
