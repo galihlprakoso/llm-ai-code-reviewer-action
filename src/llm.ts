@@ -315,6 +315,6 @@ export async function reviewPullRequest(): Promise<void> {
     {
       messages: [new HumanMessage('Please review my pull request.')]
     },
-    { configurable: { thread_id: '42' }, recursionLimit: 4, }
+    { configurable: { thread_id: '42' }, recursionLimit: 4 }
   )
 }

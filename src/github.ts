@@ -30,7 +30,7 @@ export async function getRepoStructure(
       owner,
       repo,
       path,
-      ref,
+      ref
     })
 
     let markdownStructure = ''

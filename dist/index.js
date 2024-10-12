@@ -52204,7 +52204,8 @@ async function getLocalRepoStructure(dirPath, currentPath = '') {
     return markdownStructure;
 }
 async function getFileContent(path) {
-    const { data: contents } = await octokit.repos.getContent({
+    core.debug(`[github.ts] - getFileContent - path:${path}`);
+    const response = await octokit.repos.getContent({
         owner,
         repo,
         path,
@@ -52213,25 +52214,19 @@ async function getFileContent(path) {
             format: 'raw'
         }
     });
-    if (Array.isArray(contents) && contents.length > 0) {
-        return contents[0].content || '';
-    }
-    return '';
+    core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`);
+    return response.data.toString();
 }
 async function getReadme() {
-    try {
-        const { data: readmeData } = await octokit.repos.getReadme({
-            owner,
-            repo,
-            mediaType: {
-                format: 'raw'
-            }
-        });
-        return readmeData.content || '';
-    }
-    catch {
-        return '';
-    }
+    const response = await octokit.repos.getReadme({
+        owner,
+        repo,
+        mediaType: {
+            format: 'raw'
+        }
+    });
+    core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`);
+    return response.data.toString();
 }
 function shouldReview() {
     return context.payload.pull_request === undefined;
@@ -52535,7 +52530,7 @@ const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addConditionalEdges('input_understanding_agent', (state) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
+    if ((0, messages_1.isAIMessage)(lastMessage) && lastMessage.tool_calls?.length) {
         return 'analysis_tools';
     }
     return 'knowledge_base_gatherer_agent';
@@ -52544,7 +52539,7 @@ const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addConditionalEdges('knowledge_base_gatherer_agent', (state) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
+    if ((0, messages_1.isAIMessage)(lastMessage) && lastMessage.tool_calls?.length) {
         return 'knowledge_base_tools';
     }
     return 'file_selector_agent';
@@ -52553,7 +52548,7 @@ const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addConditionalEdges('file_selector_agent', (state) => {
     const messages = state.messages;
     const lastMessage = messages[messages.length - 1];
-    if (lastMessage.tool_calls?.length) {
+    if ((0, messages_1.isAIMessage)(lastMessage) && lastMessage.tool_calls?.length) {
         return 'file_selector_agent_tools';
     }
     return 'code_review_comment_agent';
@@ -52566,7 +52561,7 @@ const graph = workflow.compile({ checkpointer });
 async function reviewPullRequest() {
     await graph.invoke({
         messages: [new messages_1.HumanMessage('Please review my pull request.')]
-    }, { configurable: { thread_id: '42' } });
+    }, { configurable: { thread_id: '42' }, recursionLimit: 4 });
 }
 
 
