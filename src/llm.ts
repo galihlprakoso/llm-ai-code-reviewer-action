@@ -4,6 +4,7 @@ import {
   AIMessageChunk,
   BaseMessage,
   HumanMessage,
+  isAIMessage,
   SystemMessage
 } from '@langchain/core/messages'
 import { END, START, StateGraph } from '@langchain/langgraph'
@@ -269,7 +270,7 @@ const workflow = new StateGraph(StateAnnotation)
       const messages = state.messages
       const lastMessage = messages[messages.length - 1] as AIMessage
 
-      if (lastMessage.tool_calls?.length) {
+      if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
         return 'analysis_tools'
       }
       return 'knowledge_base_gatherer_agent'
@@ -282,7 +283,7 @@ const workflow = new StateGraph(StateAnnotation)
       const messages = state.messages
       const lastMessage = messages[messages.length - 1] as AIMessage
 
-      if (lastMessage.tool_calls?.length) {
+      if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
         return 'knowledge_base_tools'
       }
       return 'file_selector_agent'
@@ -295,7 +296,7 @@ const workflow = new StateGraph(StateAnnotation)
       const messages = state.messages
       const lastMessage = messages[messages.length - 1] as AIMessage
 
-      if (lastMessage.tool_calls?.length) {
+      if (isAIMessage(lastMessage) && lastMessage.tool_calls?.length) {
         return 'file_selector_agent_tools'
       }
       return 'code_review_comment_agent'

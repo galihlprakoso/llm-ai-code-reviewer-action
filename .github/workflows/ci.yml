@@ -13,7 +13,7 @@ permissions:
   pull-requests: write
 
 env:
-  LANGCHAIN_TRACING_V2: true,
+  LANGCHAIN_TRACING_V2: true
   LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
   LANGCHAIN_ENDPOINT: ${{ secrets.LANGCHAIN_ENDPOINT }}
   LANGCHAIN_PROJECT: ${{ secrets.LANGCHAIN_PROJECT }}

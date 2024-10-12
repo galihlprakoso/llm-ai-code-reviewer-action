@@ -103,3 +103,6 @@ __tests__/runner/*
 *.code-workspace
 
 src/playground.ts
+
+.secrets
+pull_request.json
