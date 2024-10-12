@@ -21,11 +21,6 @@ core.debug(
   })}`
 )
 
-async function fetchText(url: string): Promise<string> {
-  const resp = await fetch(url)
-  return await resp.text()
-}
-
 export async function getRepoStructure(
   path = '',
   ref: string | undefined = undefined
@@ -35,7 +30,7 @@ export async function getRepoStructure(
       owner,
       repo,
       path,
-      ref
+      ref,
     })
 
     let markdownStructure = ''
@@ -96,7 +91,9 @@ export async function getLocalRepoStructure(
 }
 
 export async function getFileContent(path: string): Promise<string> {
-  const { data: contents } = await octokit.repos.getContent({
+  core.debug(`[github.ts] - getFileContent - path:${path}`)
+
+  const response = await octokit.repos.getContent({
     owner,
     repo,
     path,
@@ -106,27 +103,23 @@ export async function getFileContent(path: string): Promise<string> {
     }
   })
 
-  if (Array.isArray(contents) && contents.length > 0) {
-    return contents[0].content || ''
-  }
+  core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
 
-  return ''
+  return response.data.toString()
 }
 
 export async function getReadme(): Promise<string> {
-  try {
-    const { data: readmeData } = await octokit.repos.getReadme({
-      owner,
-      repo,
-      mediaType: {
-        format: 'raw'
-      }
-    })
+  const response = await octokit.repos.getReadme({
+    owner,
+    repo,
+    mediaType: {
+      format: 'raw'
+    }
+  })
 
-    return readmeData.content || ''
-  } catch {
-    return ''
-  }
+  core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`)
+
+  return response.data.toString()
 }
 
 export function shouldReview(): boolean {
@@ -186,6 +179,23 @@ export async function submitReview(
   })
 }
 
+type AsyncFunctionReturnType = ReturnType<typeof octokit.pulls.listFiles>
+
+type ListChangeType = Awaited<AsyncFunctionReturnType>
+
+let listChangesCache: ListChangeType | undefined = undefined
+
+export async function getFileChangePatch(path: string): Promise<string> {
+  if (listChangesCache) {
+    return (
+      listChangesCache.data.find(change => change.filename === path)?.patch ||
+      'NOT_FOUND'
+    )
+  }
+
+  return 'NOT_FOUND'
+}
+
 export async function getPullRequestContext(): Promise<string> {
   const readme = await getReadme()
 
@@ -200,13 +210,23 @@ export async function getPullRequestContext(): Promise<string> {
 
   const prDetails = await octokit.pulls.get({ owner, repo, pull_number })
 
-  const diff = await fetchText(prDetails.data.diff_url)
+  listChangesCache = await octokit.pulls.listFiles({
+    owner,
+    repo,
+    pull_number
+  })
 
-  // const reviews = await octokit.pulls.listReviews({
-  //   pull_number,
-  //   owner,
-  //   repo
-  // })
+  const listReviews = await octokit.pulls.listReviews({
+    pull_number,
+    owner,
+    repo
+  })
+
+  const listReviewComments = await octokit.pulls.listReviewComments({
+    pull_number,
+    owner,
+    repo
+  })
 
   core.debug(`[pullRequestDetail] - ${JSON.stringify(prDetails.data)}`)
 
@@ -223,7 +243,13 @@ Mergeable: ${prDetails.data.mergeable ? 'YES' : 'NO'}
 Mergeable State: ${prDetails.data.mergeable_state}
 Changed Files: ${prDetails.data.changed_files}
 ===================================================
-==================== Pull Request Diff ====================
-${diff}
+==================== Pull Request Changes Path ====================
+${listChangesCache.data.map(change => `- Path: ${change.filename}\n`)}
+===================================================
+==================== Pull Request Reviews ====================
+${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}\n`)}
+===================================================
+==================== Pull Request Review Comments ====================
+${listReviewComments.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}, Path: ${review.path}, Position: ${review.position}\n`)}
 ===================================================`
 }

@@ -101,3 +101,8 @@ __tests__/runner/*
 .idea
 .vscode
 *.code-workspace
+
+src/playground.ts
+
+.secrets
+pull_request.json

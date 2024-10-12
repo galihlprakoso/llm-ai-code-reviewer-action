@@ -12,6 +12,12 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  LANGCHAIN_TRACING_V2: true
+  LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+  LANGCHAIN_ENDPOINT: ${{ secrets.LANGCHAIN_ENDPOINT }}
+  LANGCHAIN_PROJECT: ${{ secrets.LANGCHAIN_PROJECT }}
+
 jobs:
   test-typescript:
     name: TypeScript Tests
@@ -53,12 +59,17 @@ jobs:
       - name: Checkout
         id: checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
 
       - name: Run AI Code Review
         uses: ./
         with:
-          ai_provider: 'GEMINI'
-          ai_provider_model: 'gemini-1.5-flash'
+          ai_provider: 'GROQ'
+          ai_provider_model: 'llama3-70b-8192'
+          codebase_high_overview_descripton: 'This repository is an LLM Code Reviewer Github Action that use typescript implemented with functional programming.'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
