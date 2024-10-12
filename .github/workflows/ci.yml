@@ -67,11 +67,12 @@ jobs:
       - name: Run AI Code Review
         uses: ./
         with:
-          ai_provider: 'GROQ'
-          ai_provider_model: 'llama3-70b-8192'
+          ai_provider: 'GEMINI'
+          ai_provider_model: 'gemini-1.5-pro'
           codebase_high_overview_descripton:
             'This repository is an LLM Code Reviewer Github Action that use
             typescript implemented with functional programming.'
+          max_tools_node_recursion: 4
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
