@@ -91,7 +91,7 @@ export async function getLocalRepoStructure(
 }
 
 export async function getFileContent(path: string): Promise<string> {
-  const { data: contents } = await octokit.repos.getContent({
+  const { data: content } = await octokit.repos.getContent({
     owner,
     repo,
     path,
@@ -101,11 +101,7 @@ export async function getFileContent(path: string): Promise<string> {
     }
   })
 
-  if (Array.isArray(contents) && contents.length > 0) {
-    return contents[0].content || ''
-  }
-
-  return ''
+  return content.toString()
 }
 
 export async function getReadme(): Promise<string> {
@@ -118,7 +114,7 @@ export async function getReadme(): Promise<string> {
       }
     })
 
-    return readmeData.content || ''
+    return readmeData.toString()
   } catch {
     return ''
   }
