@@ -108,6 +108,34 @@ export async function getFileContent(path: string): Promise<string> {
   return response.data.toString()
 }
 
+export async function getFilesContent(paths: string[]): Promise<string> {
+  core.debug(`[github.ts] - getFileContent - path:${path}`)
+
+  let contents = ''
+
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i]
+
+    const response = await octokit.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref: context.payload.pull_request!.head.ref,
+      mediaType: {
+        format: 'raw'
+      }
+    })
+
+    contents += `==================== ${path} ====================
+${response.data.toString()}
+========================================\n`
+  }
+
+  core.debug(`[github.ts] - getFilesContent - ${JSON.stringify(contents)}`)
+
+  return contents
+}
+
 export async function getReadme(): Promise<string> {
   const response = await octokit.repos.getReadme({
     owner,
@@ -194,6 +222,27 @@ export async function getFileChangePatch(path: string): Promise<string> {
   }
 
   return 'NOT_FOUND'
+}
+
+export async function getFilesChangePatch(paths: string[]): Promise<string> {
+  let contents = ''
+
+  if (listChangesCache) {
+    for (let i = 0; i < paths.length; i++) {
+      const path = paths[i]
+      const patch = listChangesCache.data.find(
+        change => change.filename === path
+      )?.patch
+
+      contents += `==================== ${path} ====================
+${patch || 'NOT_FOUND'}
+========================================\n`
+    }
+  } else {
+    return 'NOT_FOUND'
+  }
+
+  return contents
 }
 
 export async function getPullRequestContext(): Promise<string> {

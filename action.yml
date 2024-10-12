@@ -22,9 +22,6 @@ inputs:
       'Please give high overview about the codebase (e.g framework used, design
       pattern, business context, etc.)'
     required: true
-  max_tools_node_recursion:
-    description: 'Max tools recursive calls'
-    default: 1
   GITHUB_WORKSPACE:
     description: 'just pass the github.workspace value'
     required: true

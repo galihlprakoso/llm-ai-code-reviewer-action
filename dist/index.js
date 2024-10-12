@@ -52127,11 +52127,13 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getRepoStructure = getRepoStructure;
 exports.getLocalRepoStructure = getLocalRepoStructure;
 exports.getFileContent = getFileContent;
+exports.getFilesContent = getFilesContent;
 exports.getReadme = getReadme;
 exports.shouldReview = shouldReview;
 exports.commentOnPullRequest = commentOnPullRequest;
 exports.submitReview = submitReview;
 exports.getFileChangePatch = getFileChangePatch;
+exports.getFilesChangePatch = getFilesChangePatch;
 exports.getPullRequestContext = getPullRequestContext;
 const core = __importStar(__nccwpck_require__(42186));
 const github = __importStar(__nccwpck_require__(95438));
@@ -52217,6 +52219,27 @@ async function getFileContent(path) {
     core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`);
     return response.data.toString();
 }
+async function getFilesContent(paths) {
+    core.debug(`[github.ts] - getFileContent - path:${path}`);
+    let contents = '';
+    for (let i = 0; i < paths.length; i++) {
+        const path = paths[i];
+        const response = await octokit.repos.getContent({
+            owner,
+            repo,
+            path,
+            ref: context.payload.pull_request.head.ref,
+            mediaType: {
+                format: 'raw'
+            }
+        });
+        contents += `==================== ${path} ====================
+${response.data.toString()}
+========================================\n`;
+    }
+    core.debug(`[github.ts] - getFilesContent - ${JSON.stringify(contents)}`);
+    return contents;
+}
 async function getReadme() {
     const response = await octokit.repos.getReadme({
         owner,
@@ -52274,6 +52297,22 @@ async function getFileChangePatch(path) {
             'NOT_FOUND');
     }
     return 'NOT_FOUND';
+}
+async function getFilesChangePatch(paths) {
+    let contents = '';
+    if (listChangesCache) {
+        for (let i = 0; i < paths.length; i++) {
+            const path = paths[i];
+            const patch = listChangesCache.data.find(change => change.filename === path)?.patch;
+            contents += `==================== ${path} ====================
+${patch || 'NOT_FOUND'}
+========================================\n`;
+        }
+    }
+    else {
+        return 'NOT_FOUND';
+    }
+    return contents;
 }
 async function getPullRequestContext() {
     const readme = await getReadme();
@@ -52386,10 +52425,6 @@ const GROQ_API_KEY = core.getInput('GROQ_API_KEY', {
 });
 const AI_PROVIDER_GROQ = 'GROQ';
 const AI_PROVIDER_GEMINI = 'GEMINI';
-const MAX_TOOLS_NODE_RECURSION = parseInt(core.getInput('max_tools_node_recursion', {
-    required: false,
-    trimWhitespace: true
-}) || '1');
 const StateAnnotation = langgraph_2.Annotation.Root({
     messages: (0, langgraph_2.Annotation)({
         reducer: (x, y) => x.concat(y),
@@ -52521,60 +52556,22 @@ You must create review summary, and decide the review action type.`),
     await (0, github_1.submitReview)(response.review_summary, state.comments, response.review_action);
     return { messages: [] };
 }
-const toolCallsMap = {
-    'input_understanding_agent:analysis_tools': 0,
-    'knowledge_base_gatherer_agent:knowledge_base_tools': 0,
-    'file_selector_agent:file_selector_agent_tools': 0
-};
 const workflow = new langgraph_1.StateGraph(StateAnnotation)
-    .addNode('input_understanding_agent', callInputUnderstandingAgent)
     .addNode('analysis_tools', llm_tools_1.analysisToolsNode)
     .addNode('knowledge_base_tools', llm_tools_1.knowledgeBaseToolsNode)
     .addNode('file_selector_agent_tools', llm_tools_1.fileSelecterAgentToolsNode)
+    .addNode('input_understanding_agent', callInputUnderstandingAgent)
     .addNode('knowledge_base_gatherer_agent', callKnowledgeBaseGathererAgent)
     .addNode('file_selector_agent', callFileSelectorAgent)
     .addNode('code_review_comment_agent', callReviewCommentAgentNode)
     .addNode('code_review_summary_agent', callReviewSummaryAgentNode)
     .addEdge(langgraph_1.START, 'input_understanding_agent')
-    .addConditionalEdges('input_understanding_agent', (state) => {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if ((0, messages_1.isAIMessage)(lastMessage) &&
-        lastMessage.tool_calls?.length &&
-        toolCallsMap['input_understanding_agent:analysis_tools'] <
-            MAX_TOOLS_NODE_RECURSION) {
-        toolCallsMap['input_understanding_agent:analysis_tools'] += 1;
-        return 'analysis_tools';
-    }
-    return 'knowledge_base_gatherer_agent';
-})
-    .addEdge('analysis_tools', 'input_understanding_agent')
-    .addConditionalEdges('knowledge_base_gatherer_agent', (state) => {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if ((0, messages_1.isAIMessage)(lastMessage) &&
-        lastMessage.tool_calls?.length &&
-        toolCallsMap['knowledge_base_gatherer_agent:knowledge_base_tools'] <
-            MAX_TOOLS_NODE_RECURSION) {
-        toolCallsMap['knowledge_base_gatherer_agent:knowledge_base_tools'] += 1;
-        return 'knowledge_base_tools';
-    }
-    return 'file_selector_agent';
-})
-    .addEdge('knowledge_base_tools', 'knowledge_base_gatherer_agent')
-    .addConditionalEdges('file_selector_agent', (state) => {
-    const messages = state.messages;
-    const lastMessage = messages[messages.length - 1];
-    if ((0, messages_1.isAIMessage)(lastMessage) &&
-        lastMessage.tool_calls?.length &&
-        toolCallsMap['file_selector_agent:file_selector_agent_tools'] <
-            MAX_TOOLS_NODE_RECURSION) {
-        toolCallsMap['file_selector_agent:file_selector_agent_tools'] += 1;
-        return 'file_selector_agent_tools';
-    }
-    return 'code_review_comment_agent';
-})
-    .addEdge('file_selector_agent_tools', 'file_selector_agent')
+    .addEdge('input_understanding_agent', 'analysis_tools')
+    .addEdge('analysis_tools', 'knowledge_base_gatherer_agent')
+    .addEdge('knowledge_base_gatherer_agent', 'knowledge_base_tools')
+    .addEdge('knowledge_base_tools', 'file_selector_agent')
+    .addEdge('file_selector_agent', 'file_selector_agent_tools')
+    .addEdge('file_selector_agent_tools', 'code_review_comment_agent')
     .addEdge('code_review_comment_agent', 'code_review_summary_agent')
     .addEdge('code_review_summary_agent', langgraph_1.END);
 const checkpointer = new langgraph_2.MemorySaver();
@@ -52632,10 +52629,10 @@ const TAVILY_API_KEY = core.getInput('TAVILY_API_KEY', {
     required: false,
     trimWhitespace: true
 });
-const getFileContentTool = (0, tools_1.tool)(async ({ path }) => {
+const getFilesContentTool = (0, tools_1.tool)(async ({ paths }) => {
     try {
-        core.debug(`[get_file_content]: called!`);
-        const fileContent = await (0, github_1.getFileContent)(path);
+        core.debug(`[get_files_content]: called!`);
+        const fileContent = await (0, github_1.getFilesContent)(paths);
         core.debug(`[get_file_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`);
         return fileContent;
     }
@@ -52644,32 +52641,36 @@ const getFileContentTool = (0, tools_1.tool)(async ({ path }) => {
         return 'NOT_FOUND';
     }
 }, {
-    name: 'get_file_full_content',
+    name: 'get_files_full_content',
     description: 'Call to get the content of specific file in the source branch to enrich your decision before reviewing specific line on that file. It will return NOT_FOUND if the file is not exists.',
     schema: zod_1.z.object({
-        path: zod_1.z
+        paths: zod_1.z
+            .array(zod_1.z
             .string()
-            .describe('Path to file (e.g <folder name>/<file name>.<file extension>')
+            .describe('Path to file (e.g <folder name>/<file name>.<file extension>'))
+            .describe('The list of files paths that you want to get their full content.')
     })
 });
-const getFileChangesPatchTool = (0, tools_1.tool)(async ({ path }) => {
+const getFilesChangesPatchTool = (0, tools_1.tool)(async ({ paths }) => {
     try {
-        core.debug(`[get_file_content]: called!`);
-        const fileContent = await (0, github_1.getFileChangePatch)(path);
-        core.debug(`[get_file_content]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`);
+        core.debug(`[get_files_changes_patch]: called!`);
+        const fileContent = await (0, github_1.getFilesChangePatch)(paths);
+        core.debug(`[get_files_changes_patch]: ${TOOL_RESPONSE_SUCCESS}. fileContent: ${fileContent}`);
         return fileContent;
     }
     catch (err) {
-        core.debug(`[get_file_content]: ${TOOL_RESPONSE_FAILED}. fileContent: ${err.message}`);
+        core.debug(`[get_files_changes_patch]: ${TOOL_RESPONSE_FAILED}. fileContent: ${err.message}`);
         return 'NOT_FOUND';
     }
 }, {
-    name: 'get_file_changes_patch',
+    name: 'get_files_changes_patch',
     description: "Call to get the patch of specific file that describe it's differences between source and target branch.",
     schema: zod_1.z.object({
-        path: zod_1.z
+        paths: zod_1.z
+            .array(zod_1.z
             .string()
-            .describe('Path to file (e.g <folder name>/<file name>.<file extension>')
+            .describe('Path to file (e.g <folder name>/<file name>.<file extension>'))
+            .describe('The list of files paths that you want to get their full content.')
     })
 });
 const tavilySearchToolArr = TAVILY_API_KEY
@@ -52682,22 +52683,13 @@ const wikipediaQueryRunTool = new wikipedia_query_run_1.WikipediaQueryRun({
     topKResults: 3,
     maxDocContentLength: 4000
 });
-exports.analysisTools = [
-    getFileContentTool,
-    ...tavilySearchToolArr,
-    wikipediaQueryRunTool,
-    stackExchangeTitleTool
-];
+exports.analysisTools = [getFilesContentTool];
 exports.knowledgeBaseTools = [
-    getFileContentTool,
     ...tavilySearchToolArr,
     wikipediaQueryRunTool,
     stackExchangeTitleTool
 ];
-exports.fileSelecterAgentTools = [
-    getFileChangesPatchTool,
-    getFileContentTool
-];
+exports.fileSelecterAgentTools = [getFilesChangesPatchTool];
 exports.analysisToolsNode = new prebuilt_1.ToolNode(exports.analysisTools);
 exports.knowledgeBaseToolsNode = new prebuilt_1.ToolNode(exports.knowledgeBaseTools);
 exports.fileSelecterAgentToolsNode = new prebuilt_1.ToolNode(exports.fileSelecterAgentTools);
