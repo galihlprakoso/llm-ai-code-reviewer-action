@@ -1,4 +1,4 @@
-# AI Code Reviewer - GitHub Action
+# LLM AI Code Reviewer - GitHub Action
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -38,11 +38,13 @@ add it to your GitHub Actions pipeline, and it will automatically analyze your
 code using the configured AI models, providing feedback and suggestions for
 improvement.
 
-### 🛠️ Extensible Design
+### 💬 Reply Code Review Comments
 
-With the use of LangChain, this action is designed to be extensible, allowing
-you to add custom tools and models. This flexibility makes it possible to tailor
-the code review process to meet your team’s unique requirements.
+This action can automatically reply to code review comments made on pull requests. It leverages AI to generate meaningful responses, facilitating better communication and collaboration within your team.
+
+### 🌍 Fetch Data from the Internet
+
+The action can fetch relevant data from external sources such as **Tavily Search**, **Wikipedia**, and **StackExchange**. This feature allows the code reviewer to incorporate the latest knowledge, best practices, and relevant information, enhancing the overall review process and ensuring that the feedback provided is up-to-date and informed.
 
 ## Usage
 
@@ -53,10 +55,12 @@ GitHub Actions YAML file:
 name: AI Code Review
 
 on:
-  push:
+  pull_request:
+    types: [opened, synchronize, reopened]
     branches:
       - main
-  pull_request:
+  pull_request_review_comment:
+    types: [created, edited]
     branches:
       - main
 
@@ -70,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run AI Code Review
-        uses: galihlprakoso/llm-ai-code-reviewer-action@v1.0.3
+        uses: galihlprakoso/llm-ai-code-reviewer-action@v1.1.1
         with:
           ai_provider: 'GROQ'
           ai_provider_model: 'llama-3.1-70b-versatile'
@@ -81,10 +85,9 @@ jobs:
           GOOGLE_GEMINI_API_KEY: <your gemini api key>
           GROQ_API_KEY: <your groq api key>
           TAVILY_API_KEY: <your tavily api key>
+
 ```
-
 ## Support My Work
-
 <div align="center">
   <a href="https://buymeacoffee.com/ghackdev" target="_blank">
     <img src="https://github.com/galihlprakoso/logseq-plugin-assistseq-ai-assistant/raw/master/images/buymeacoffee.png" width="200" />
@@ -92,11 +95,9 @@ jobs:
 </div>
 
 ## License
-
 This project is licensed under the
 <a href="https://github.com/galihlprakoso/ai-code-reviewer-action/blob/main/LICENSE">MIT
 License</a>.
 
 ## Template
-
 - https://github.com/actions/typescript-action
