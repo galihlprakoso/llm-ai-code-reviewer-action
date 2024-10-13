@@ -1,16 +1,19 @@
 import * as core from '@actions/core'
-import { shouldReview } from './github'
+import { isNeedToReviewPullRequest } from './github'
 import { reviewPullRequest } from './llm'
 
 export async function run(): Promise<void> {
-  if (shouldReview()) {
-    core.setFailed('This action can only be triggered by a pull request event.')
-    return
-  }
+  if (isNeedToReviewPullRequest() || isNeedToReviewPullRequest()) {
+    core.info('[main] - Reviewing pull request...')
 
-  try {
-    await reviewPullRequest()
-  } catch (error) {
-    core.setFailed((error as Error).message)
+    try {
+      await reviewPullRequest()
+    } catch (error) {
+      core.setFailed((error as Error).message)
+    }
+  } else {
+    core.info(
+      '[main] - Skipping review, this action will only review opened, synced, and re-opened pull request. And also when there is comment to review created or edited.'
+    )
   }
 }

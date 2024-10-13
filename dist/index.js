@@ -52127,10 +52127,14 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getLocalRepoStructure = getLocalRepoStructure;
 exports.getFileContent = getFileContent;
 exports.getReadme = getReadme;
-exports.shouldReview = shouldReview;
+exports.isNeedToReviewPullRequest = isNeedToReviewPullRequest;
+exports.isNeedToReplyReviewComments = isNeedToReplyReviewComments;
 exports.submitReview = submitReview;
 exports.getListFiles = getListFiles;
+exports.getListReviewComments = getListReviewComments;
 exports.getPullRequestContext = getPullRequestContext;
+exports.getAuthenticatedUserLogin = getAuthenticatedUserLogin;
+exports.replyToReviewComment = replyToReviewComment;
 const core = __importStar(__nccwpck_require__(42186));
 const github = __importStar(__nccwpck_require__(95438));
 const fs = __importStar(__nccwpck_require__(57147));
@@ -52139,6 +52143,13 @@ const GITHUB_TOKEN = core.getInput('GITHUB_TOKEN', { required: true });
 const GITHUB_WORKSPACE = core.getInput('GITHUB_WORKSPACE', { required: true });
 const octokit = github.getOctokit(GITHUB_TOKEN).rest;
 const context = github.context;
+const EVENT_NAME_PULL_REQUEST = 'pull_request';
+const PAYLOAD_ACTION_PULL_REQUEST_OPENED = 'opened';
+const PAYLOAD_ACTION_PULL_REQUEST_SYNC = 'synchronize';
+const PAYLOAD_ACTION_PULL_REQUEST_REOPENED = 'reopened';
+const EVENT_NAME_PULL_REQUEST_REVIEW_COMMENT = 'pull_request_review_comment';
+const PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_CREATED = 'created';
+const PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_SYNC = 'edited';
 const owner = context.repo.owner;
 const repo = context.repo.repo;
 const pull_number = context.payload.pull_request?.number || 0;
@@ -52196,8 +52207,20 @@ async function getReadme() {
     core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`);
     return response.data.toString();
 }
-function shouldReview() {
-    return context.payload.pull_request === undefined;
+function isNeedToReviewPullRequest() {
+    return (context.eventName === EVENT_NAME_PULL_REQUEST &&
+        [
+            PAYLOAD_ACTION_PULL_REQUEST_OPENED,
+            PAYLOAD_ACTION_PULL_REQUEST_SYNC,
+            PAYLOAD_ACTION_PULL_REQUEST_REOPENED
+        ].includes(context.payload.action || ''));
+}
+function isNeedToReplyReviewComments() {
+    return (context.eventName === EVENT_NAME_PULL_REQUEST_REVIEW_COMMENT &&
+        [
+            PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_CREATED,
+            PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_SYNC
+        ].includes(context.payload.action || ''));
 }
 async function submitReview(review_summary, comments, action) {
     await octokit.pulls.createReview({
@@ -52222,6 +52245,15 @@ async function getListFiles() {
     });
     return listFiles.data;
 }
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+async function getListReviewComments() {
+    const listReviewComments = await octokit.pulls.listReviewComments({
+        owner,
+        repo,
+        pull_number
+    });
+    return listReviewComments.data;
+}
 async function getPullRequestContext() {
     const readme = await getReadme();
     core.debug(`[readme] - ${readme}`);
@@ -52243,6 +52275,15 @@ async function getPullRequestContext() {
         owner,
         repo
     });
+    const topLevelComments = listReviewComments.data.filter(comment => !comment.in_reply_to_id);
+    const replies = listReviewComments.data.filter(comment => !!comment.in_reply_to_id);
+    const repliesMap = {};
+    topLevelComments.forEach(comment => {
+        repliesMap[comment.id] = [];
+    });
+    replies.forEach(reply => {
+        repliesMap[reply.in_reply_to_id].push(reply);
+    });
     core.debug(`[pullRequestDetail] - ${JSON.stringify(prDetails.data)}`);
     return `==================== README.md ====================
 ${readme}
@@ -52258,16 +52299,34 @@ Mergeable State: ${prDetails.data.mergeable_state}
 Changed Files: ${prDetails.data.changed_files}
 ===================================================
 ==================== Pull Request Changes Patches ====================
-${listFiles.data.map(file => `--- ${path} ---
+${listFiles.data.map(file => `=== ${path} ===
 ${(file.patch || '').substring(0, 1000)}
-------\n`)}
+======\n`)}
 ===================================================
 ==================== Pull Request Reviews ====================
-${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}\n`)}
+${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}\n`)}
 ===================================================
 ==================== Pull Request Review Comments ====================
-${listReviewComments.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}, Path: ${review.path}, Position: ${review.position}\n`)}
+${topLevelComments.map(review => `======= By: ${review.user?.name} =======
+Body: ${review.body}}
+Replies:
+${repliesMap[review.id].map(reply => `- By: ${reply.user?.name}, Body: ${reply.body}\n`)}
+=================  
+`)}
 ===================================================`;
+}
+async function getAuthenticatedUserLogin() {
+    const { data: authenticatedUser } = await octokit.users.getAuthenticated();
+    return authenticatedUser.login;
+}
+async function replyToReviewComment(topLevelCommentId, replyBody) {
+    await octokit.pulls.createReplyForReviewComment({
+        owner,
+        repo,
+        pull_number,
+        comment_id: topLevelCommentId,
+        body: replyBody
+    });
 }
 
 
@@ -52489,16 +52548,70 @@ Review Comment: ${comment.comment}
     }
     return { messages: [] };
 }
+async function replyReviewCommentsAgentNode(state) {
+    const githubAuthenticatedUserLogin = await (0, github_1.getAuthenticatedUserLogin)();
+    const listReviewComments = await (0, github_1.getListReviewComments)();
+    const topLevelComments = listReviewComments.filter(comment => !comment.in_reply_to_id);
+    const replies = listReviewComments.filter(comment => !!comment.in_reply_to_id);
+    const repliesMap = {};
+    topLevelComments.forEach(comment => {
+        repliesMap[comment.id] = [];
+    });
+    replies.forEach(reply => {
+        repliesMap[reply.in_reply_to_id].push(reply);
+    });
+    const model = getModel();
+    for (let i = 0; i < topLevelComments.length; i++) {
+        const topLevelComment = topLevelComments[i];
+        if (topLevelComment.user.login === githubAuthenticatedUserLogin &&
+            repliesMap[topLevelComment.id].length) {
+            const lastComment = repliesMap[topLevelComment.id][repliesMap[topLevelComment.id].length - 1];
+            if (lastComment.user.login !== githubAuthenticatedUserLogin) {
+                const response = await model.invoke([
+                    ...state.messages,
+                    new messages_1.HumanMessage(`Please reply this code review comments conversation:
+Diff Hunk:
+${topLevelComment.diff_hunk}
+Conversations:
+- AI: ${topLevelComment.body}
+${repliesMap[topLevelComment.id].map(comment => `- ${comment.user.login === githubAuthenticatedUserLogin ? 'AI' : `Human(${comment.user.login})`}: ${comment.body}\n`)}
+`)
+                ]);
+                await (0, github_1.replyToReviewComment)(topLevelComment.id, response.content);
+            }
+        }
+    }
+    return { messages: [] };
+}
 const workflow = new langgraph_1.StateGraph(StateAnnotation)
     .addNode('input_understanding_agent_node', inputUnderstandingAgentNode)
     .addNode('knowledge_updates_agent_node', knowledgeUpdatesAgentNode)
     .addNode('knowledge_base_tools', llm_tools_1.knowledgeBaseToolsNode)
     .addNode('review_comments_agent_node', reviewCommentsAgentNode)
     .addNode('review_summary_agent_node', reviewSummaryAgentNode)
+    .addNode('reply_review_comments_agent_node', replyReviewCommentsAgentNode)
     .addEdge(langgraph_1.START, 'input_understanding_agent_node')
     .addEdge('input_understanding_agent_node', 'knowledge_updates_agent_node')
     .addEdge('knowledge_updates_agent_node', 'knowledge_base_tools')
-    .addEdge('knowledge_base_tools', 'review_comments_agent_node')
+    .addConditionalEdges('knowledge_base_tools', 
+// eslint-disable-next-line
+(_state) => {
+    if ((0, github_1.isNeedToReplyReviewComments)()) {
+        return 'reply_review_comments_agent_node';
+    }
+    if ((0, github_1.isNeedToReviewPullRequest)()) {
+        return 'review_comments_agent_node';
+    }
+    return langgraph_1.END;
+})
+    .addConditionalEdges('reply_review_comments_agent_node', 
+// eslint-disable-next-line
+(_state) => {
+    if ((0, github_1.isNeedToReviewPullRequest)()) {
+        return 'review_comments_agent_node';
+    }
+    return langgraph_1.END;
+})
     .addEdge('review_comments_agent_node', 'review_summary_agent_node')
     .addEdge('review_summary_agent_node', langgraph_1.END);
 const checkpointer = new langgraph_2.MemorySaver();
@@ -52605,15 +52718,17 @@ const core = __importStar(__nccwpck_require__(42186));
 const github_1 = __nccwpck_require__(70978);
 const llm_1 = __nccwpck_require__(51968);
 async function run() {
-    if ((0, github_1.shouldReview)()) {
-        core.setFailed('This action can only be triggered by a pull request event.');
-        return;
+    if ((0, github_1.isNeedToReviewPullRequest)() || (0, github_1.isNeedToReviewPullRequest)()) {
+        core.info('[main] - Reviewing pull request...');
+        try {
+            await (0, llm_1.reviewPullRequest)();
+        }
+        catch (error) {
+            core.setFailed(error.message);
+        }
     }
-    try {
-        await (0, llm_1.reviewPullRequest)();
-    }
-    catch (error) {
-        core.setFailed(error.message);
+    else {
+        core.info('[main] - Skipping review, this action will only review opened, synced, and re-opened pull request. And also when there is comment to review created or edited.');
     }
 }
 

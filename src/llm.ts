@@ -11,9 +11,14 @@ import { ChatGoogleGenerativeAI } from '@langchain/google-genai'
 import { BaseChatModel } from '@langchain/core/language_models/chat_models'
 import { exit } from 'process'
 import {
+  getAuthenticatedUserLogin,
   getFileContent,
   getListFiles,
+  getListReviewComments,
   getPullRequestContext,
+  isNeedToReplyReviewComments,
+  isNeedToReviewPullRequest,
+  replyToReviewComment,
   submitReview
 } from './github'
 import { z } from 'zod'
@@ -267,16 +272,105 @@ Review Comment: ${comment.comment}
   return { messages: [] }
 }
 
+async function replyReviewCommentsAgentNode(
+  state: typeof StateAnnotation.State
+): Promise<
+  | {
+      messages: BaseMessage[]
+    }
+  | undefined
+> {
+  const githubAuthenticatedUserLogin = await getAuthenticatedUserLogin()
+  const listReviewComments = await getListReviewComments()
+
+  const topLevelComments = listReviewComments.filter(
+    comment => !comment.in_reply_to_id
+  )
+  const replies = listReviewComments.filter(comment => !!comment.in_reply_to_id)
+
+  const repliesMap: Record<string, typeof listReviewComments> = {}
+
+  topLevelComments.forEach(comment => {
+    repliesMap[comment.id] = []
+  })
+
+  replies.forEach(reply => {
+    repliesMap[reply.in_reply_to_id!].push(reply)
+  })
+
+  const model = getModel()
+
+  for (let i = 0; i < topLevelComments.length; i++) {
+    const topLevelComment = topLevelComments[i]
+
+    if (
+      topLevelComment.user.login === githubAuthenticatedUserLogin &&
+      repliesMap[topLevelComment.id].length
+    ) {
+      const lastComment =
+        repliesMap[topLevelComment.id][
+          repliesMap[topLevelComment.id].length - 1
+        ]
+
+      if (lastComment.user.login !== githubAuthenticatedUserLogin) {
+        const response = await model.invoke([
+          ...state.messages,
+          new HumanMessage(`Please reply this code review comments conversation:
+Diff Hunk:
+${topLevelComment.diff_hunk}
+Conversations:
+- AI: ${topLevelComment.body}
+${repliesMap[topLevelComment.id].map(comment => `- ${comment.user.login === githubAuthenticatedUserLogin ? 'AI' : `Human(${comment.user.login})`}: ${comment.body}\n`)}
+`)
+        ])
+
+        await replyToReviewComment(
+          topLevelComment.id,
+          response.content as string
+        )
+      }
+    }
+  }
+
+  return { messages: [] }
+}
+
 const workflow = new StateGraph(StateAnnotation)
   .addNode('input_understanding_agent_node', inputUnderstandingAgentNode)
   .addNode('knowledge_updates_agent_node', knowledgeUpdatesAgentNode)
   .addNode('knowledge_base_tools', knowledgeBaseToolsNode)
   .addNode('review_comments_agent_node', reviewCommentsAgentNode)
   .addNode('review_summary_agent_node', reviewSummaryAgentNode)
+  .addNode('reply_review_comments_agent_node', replyReviewCommentsAgentNode)
   .addEdge(START, 'input_understanding_agent_node')
   .addEdge('input_understanding_agent_node', 'knowledge_updates_agent_node')
   .addEdge('knowledge_updates_agent_node', 'knowledge_base_tools')
-  .addEdge('knowledge_base_tools', 'review_comments_agent_node')
+  .addConditionalEdges(
+    'knowledge_base_tools',
+    // eslint-disable-next-line
+    (_state: typeof StateAnnotation.State) => {
+      if (isNeedToReplyReviewComments()) {
+        return 'reply_review_comments_agent_node'
+      }
+
+      if (isNeedToReviewPullRequest()) {
+        return 'review_comments_agent_node'
+      }
+
+      return END
+    }
+  )
+  .addConditionalEdges(
+    'reply_review_comments_agent_node',
+    // eslint-disable-next-line
+    (_state: typeof StateAnnotation.State) => {
+      if (isNeedToReviewPullRequest()) {
+        return 'review_comments_agent_node'
+      }
+
+      return END
+    }
+  )
   .addEdge('review_comments_agent_node', 'review_summary_agent_node')
   .addEdge('review_summary_agent_node', END)
 
