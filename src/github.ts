@@ -9,6 +9,7 @@ const GITHUB_WORKSPACE = core.getInput('GITHUB_WORKSPACE', { required: true })
 const octokit = github.getOctokit(GITHUB_TOKEN).rest
 const context = github.context
 
+const CONTENT_NOT_FOUND = 'CONTENT_NOT_FOUND'
 const EVENT_NAME_PULL_REQUEST = 'pull_request'
 const PAYLOAD_ACTION_PULL_REQUEST_OPENED = 'opened'
 const PAYLOAD_ACTION_PULL_REQUEST_SYNC = 'synchronize'
@@ -66,21 +67,29 @@ export async function getLocalRepoStructure(
 }
 
 export async function getFileContent(path: string): Promise<string> {
-  core.debug(`[github.ts] - getFileContent - path:${path}`)
+  try {
+    core.debug(`[github.ts] - getFileContent - path:${path}`)
 
-  const response = await octokit.repos.getContent({
-    owner,
-    repo,
-    path,
-    ref: context.payload.pull_request!.head.ref,
-    mediaType: {
-      format: 'raw'
-    }
-  })
+    const response = await octokit.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref: context.payload.pull_request!.head.ref,
+      mediaType: {
+        format: 'raw'
+      }
+    })
 
-  core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
+    core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
 
-  return response.data.toString()
+    return response.data.toString()
+  } catch (err) {
+    core.debug(
+      `[github.ts] - getFileContent -  Error: ${(err as Error).message}`
+    )
+
+    return CONTENT_NOT_FOUND
+  }
 }
 
 export async function getReadme(): Promise<string> {

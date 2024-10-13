@@ -52143,6 +52143,7 @@ const GITHUB_TOKEN = core.getInput('GITHUB_TOKEN', { required: true });
 const GITHUB_WORKSPACE = core.getInput('GITHUB_WORKSPACE', { required: true });
 const octokit = github.getOctokit(GITHUB_TOKEN).rest;
 const context = github.context;
+const CONTENT_NOT_FOUND = 'CONTENT_NOT_FOUND';
 const EVENT_NAME_PULL_REQUEST = 'pull_request';
 const PAYLOAD_ACTION_PULL_REQUEST_OPENED = 'opened';
 const PAYLOAD_ACTION_PULL_REQUEST_SYNC = 'synchronize';
@@ -52183,18 +52184,24 @@ async function getLocalRepoStructure(dirPath, currentPath = '') {
     return markdownStructure;
 }
 async function getFileContent(path) {
-    core.debug(`[github.ts] - getFileContent - path:${path}`);
-    const response = await octokit.repos.getContent({
-        owner,
-        repo,
-        path,
-        ref: context.payload.pull_request.head.ref,
-        mediaType: {
-            format: 'raw'
-        }
-    });
-    core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`);
-    return response.data.toString();
+    try {
+        core.debug(`[github.ts] - getFileContent - path:${path}`);
+        const response = await octokit.repos.getContent({
+            owner,
+            repo,
+            path,
+            ref: context.payload.pull_request.head.ref,
+            mediaType: {
+                format: 'raw'
+            }
+        });
+        core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`);
+        return response.data.toString();
+    }
+    catch (err) {
+        core.debug(`[github.ts] - getFileContent -  Error: ${err.message}`);
+        return CONTENT_NOT_FOUND;
+    }
 }
 async function getReadme() {
     const response = await octokit.repos.getReadme({
