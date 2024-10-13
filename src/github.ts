@@ -9,6 +9,16 @@ const GITHUB_WORKSPACE = core.getInput('GITHUB_WORKSPACE', { required: true })
 const octokit = github.getOctokit(GITHUB_TOKEN).rest
 const context = github.context
 
+const CONTENT_NOT_FOUND = 'CONTENT_NOT_FOUND'
+const EVENT_NAME_PULL_REQUEST = 'pull_request'
+const PAYLOAD_ACTION_PULL_REQUEST_OPENED = 'opened'
+const PAYLOAD_ACTION_PULL_REQUEST_SYNC = 'synchronize'
+const PAYLOAD_ACTION_PULL_REQUEST_REOPENED = 'reopened'
+
+const EVENT_NAME_PULL_REQUEST_REVIEW_COMMENT = 'pull_request_review_comment'
+const PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_CREATED = 'created'
+const PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_SYNC = 'edited'
+
 const owner = context.repo.owner
 const repo = context.repo.repo
 const pull_number = context.payload.pull_request?.number || 0
@@ -57,21 +67,29 @@ export async function getLocalRepoStructure(
 }
 
 export async function getFileContent(path: string): Promise<string> {
-  core.debug(`[github.ts] - getFileContent - path:${path}`)
+  try {
+    core.debug(`[github.ts] - getFileContent - path:${path}`)
 
-  const response = await octokit.repos.getContent({
-    owner,
-    repo,
-    path,
-    ref: context.payload.pull_request!.head.ref,
-    mediaType: {
-      format: 'raw'
-    }
-  })
+    const response = await octokit.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref: context.payload.pull_request!.head.ref,
+      mediaType: {
+        format: 'raw'
+      }
+    })
 
-  core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
+    core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
 
-  return response.data.toString()
+    return response.data.toString()
+  } catch (err) {
+    core.debug(
+      `[github.ts] - getFileContent -  Error: ${(err as Error).message}`
+    )
+
+    return CONTENT_NOT_FOUND
+  }
 }
 
 export async function getReadme(): Promise<string> {
@@ -88,8 +106,25 @@ export async function getReadme(): Promise<string> {
   return response.data.toString()
 }
 
-export function shouldReview(): boolean {
-  return context.payload.pull_request === undefined
+export function isNeedToReviewPullRequest(): boolean {
+  return (
+    context.eventName === EVENT_NAME_PULL_REQUEST &&
+    [
+      PAYLOAD_ACTION_PULL_REQUEST_OPENED,
+      PAYLOAD_ACTION_PULL_REQUEST_SYNC,
+      PAYLOAD_ACTION_PULL_REQUEST_REOPENED
+    ].includes(context.payload.action || '')
+  )
+}
+
+export function isNeedToReplyReviewComments(): boolean {
+  return (
+    context.eventName === EVENT_NAME_PULL_REQUEST_REVIEW_COMMENT &&
+    [
+      PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_CREATED,
+      PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_SYNC
+    ].includes(context.payload.action || '')
+  )
 }
 
 export async function submitReview(
@@ -120,6 +155,17 @@ export async function getListFiles() {
   })
 
   return listFiles.data
+}
+
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+export async function getListReviewComments() {
+  const listReviewComments = await octokit.pulls.listReviewComments({
+    owner,
+    repo,
+    pull_number
+  })
+
+  return listReviewComments.data
 }
 
 export async function getPullRequestContext(): Promise<string> {
@@ -154,6 +200,23 @@ export async function getPullRequestContext(): Promise<string> {
     repo
   })
 
+  const topLevelComments = listReviewComments.data.filter(
+    comment => !comment.in_reply_to_id
+  )
+  const replies = listReviewComments.data.filter(
+    comment => !!comment.in_reply_to_id
+  )
+
+  const repliesMap: Record<string, typeof listReviewComments.data> = {}
+
+  topLevelComments.forEach(comment => {
+    repliesMap[comment.id] = []
+  })
+
+  replies.forEach(reply => {
+    repliesMap[reply.in_reply_to_id!].push(reply)
+  })
+
   core.debug(`[pullRequestDetail] - ${JSON.stringify(prDetails.data)}`)
 
   return `==================== README.md ====================
@@ -171,15 +234,40 @@ Changed Files: ${prDetails.data.changed_files}
 ===================================================
 ==================== Pull Request Changes Patches ====================
 ${listFiles.data.map(
-  file => `--- ${path} ---
+  file => `=== ${path} ===
 ${(file.patch || '').substring(0, 1000)}
-------\n`
+======\n`
 )}
 ===================================================
 ==================== Pull Request Reviews ====================
-${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}\n`)}
+${listReviews.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}\n`)}
 ===================================================
 ==================== Pull Request Review Comments ====================
-${listReviewComments.data.map(review => `- By: ${review.user?.name}, Body: ${review.body}}, Path: ${review.path}, Position: ${review.position}\n`)}
+${topLevelComments.map(
+  review => `======= By: ${review.user?.name} =======
+Body: ${review.body}}
+Replies:
+${repliesMap[review.id].map(reply => `- By: ${reply.user?.name}, Body: ${reply.body}\n`)}
+=================  
+`
+)}
 ===================================================`
+}
+
+export async function getAuthenticatedUserLogin(): Promise<string> {
+  const { data: authenticatedUser } = await octokit.users.getAuthenticated()
+  return authenticatedUser.login
+}
+
+export async function replyToReviewComment(
+  topLevelCommentId: number,
+  replyBody: string
+): Promise<void> {
+  await octokit.pulls.createReplyForReviewComment({
+    owner,
+    repo,
+    pull_number,
+    comment_id: topLevelCommentId,
+    body: replyBody
+  })
 }
