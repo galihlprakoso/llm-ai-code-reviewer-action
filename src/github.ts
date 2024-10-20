@@ -57,9 +57,7 @@ export async function getLocalRepoStructure(
       }
     }
   } catch (error) {
-    core.debug(
-      `[GITHUB] - getLocalRepoStructure: ${(error as Error).message}`
-    )
+    core.debug(`[GITHUB] - getLocalRepoStructure: ${(error as Error).message}`)
     return ''
   }
 
@@ -84,9 +82,7 @@ export async function getFileContent(path: string): Promise<string> {
 
     return response.data.toString()
   } catch (err) {
-    core.debug(
-      `[GITHUB] - getFileContent -  Error: ${(err as Error).message}`
-    )
+    core.debug(`[GITHUB] - getFileContent -  Error: ${(err as Error).message}`)
 
     return CONTENT_NOT_FOUND
   }

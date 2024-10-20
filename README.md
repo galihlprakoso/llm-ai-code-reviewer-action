@@ -40,11 +40,17 @@ improvement.
 
 ### 💬 Reply Code Review Comments
 
-This action can automatically reply to code review comments made on pull requests. It leverages AI to generate meaningful responses, facilitating better communication and collaboration within your team.
+This action can automatically reply to code review comments made on pull
+requests. It leverages AI to generate meaningful responses, facilitating better
+communication and collaboration within your team.
 
 ### 🌍 Fetch Data from the Internet
 
-The action can fetch relevant data from external sources such as **Tavily Search**, **Wikipedia**, and **StackExchange**. This feature allows the code reviewer to incorporate the latest knowledge, best practices, and relevant information, enhancing the overall review process and ensuring that the feedback provided is up-to-date and informed.
+The action can fetch relevant data from external sources such as **Tavily
+Search**, **Wikipedia**, and **StackExchange**. This feature allows the code
+reviewer to incorporate the latest knowledge, best practices, and relevant
+information, enhancing the overall review process and ensuring that the feedback
+provided is up-to-date and informed.
 
 ## Usage
 
@@ -85,9 +91,10 @@ jobs:
           GOOGLE_GEMINI_API_KEY: <your gemini api key>
           GROQ_API_KEY: <your groq api key>
           TAVILY_API_KEY: <your tavily api key>
-
 ```
+
 ## Support My Work
+
 <div align="center">
   <a href="https://buymeacoffee.com/ghackdev" target="_blank">
     <img src="https://github.com/galihlprakoso/logseq-plugin-assistseq-ai-assistant/raw/master/images/buymeacoffee.png" width="200" />
@@ -95,9 +102,11 @@ jobs:
 </div>
 
 ## License
+
 This project is licensed under the
 <a href="https://github.com/galihlprakoso/ai-code-reviewer-action/blob/main/LICENSE">MIT
 License</a>.
 
 ## Template
+
 - https://github.com/actions/typescript-action

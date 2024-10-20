@@ -52154,7 +52154,7 @@ const PAYLOAD_ACTION_PULL_REQUEST_REVIEW_COMMENT_SYNC = 'edited';
 const owner = context.repo.owner;
 const repo = context.repo.repo;
 const pull_number = context.payload.pull_request?.number || 0;
-core.debug(`[github.ts] - context: ${JSON.stringify({
+core.debug(`[GITHUB] - context: ${JSON.stringify({
     owner,
     repo,
     pull_number
@@ -52178,14 +52178,14 @@ async function getLocalRepoStructure(dirPath, currentPath = '') {
         }
     }
     catch (error) {
-        core.debug(`[github.ts] - getLocalRepoStructure: ${error.message}`);
+        core.debug(`[GITHUB] - getLocalRepoStructure: ${error.message}`);
         return '';
     }
     return markdownStructure;
 }
 async function getFileContent(path) {
     try {
-        core.debug(`[github.ts] - getFileContent - path:${path}`);
+        core.debug(`[GITHUB] - getFileContent - path:${path}`);
         const response = await octokit.repos.getContent({
             owner,
             repo,
@@ -52195,11 +52195,11 @@ async function getFileContent(path) {
                 format: 'raw'
             }
         });
-        core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`);
+        core.debug(`[GITHUB] - getFileContent - ${JSON.stringify(response)}`);
         return response.data.toString();
     }
     catch (err) {
-        core.debug(`[github.ts] - getFileContent -  Error: ${err.message}`);
+        core.debug(`[GITHUB] - getFileContent -  Error: ${err.message}`);
         return CONTENT_NOT_FOUND;
     }
 }
@@ -52211,7 +52211,7 @@ async function getReadme() {
             format: 'raw'
         }
     });
-    core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`);
+    core.debug(`[GITHUB] - getReadme - ${JSON.stringify(response)}`);
     return response.data.toString();
 }
 function isNeedToReviewPullRequest() {
@@ -52470,6 +52470,7 @@ ${pullRequestContext}`)
     return { messages: [response] };
 }
 async function knowledgeUpdatesAgentNode(state) {
+    core.info('[LLM] - Updating knowledges...');
     const model = getModel();
     const modelWithTools = model.bindTools(llm_tools_1.knowledgeBaseTools);
     const response = await modelWithTools.invoke([
@@ -52480,6 +52481,7 @@ async function knowledgeUpdatesAgentNode(state) {
     return { messages: [response] };
 }
 async function reviewCommentsAgentNode(state) {
+    core.info('[LLM] - Reviewing code changes...');
     const outputSchema = zod_1.z.object({
         comment: zod_1.z.string().describe('Your comment to specific file and position.'),
         position: zod_1.z
@@ -52497,6 +52499,7 @@ async function reviewCommentsAgentNode(state) {
     const comments = [];
     for (let i = 0; i < listFiles.length; i++) {
         const listFile = listFiles[i];
+        core.info(`[LLM] - Reviewing file: ${listFile.filename} ...`);
         const fullFileContent = await (0, github_1.getFileContent)(listFile.filename);
         const response = await modelWithStructuredOutput.invoke([
             ...state.messages,
@@ -52524,6 +52527,7 @@ ${fullFileContent.substring(0, FULL_SOURCE_CODE_TEXT_LIMIT)}
     return { comments };
 }
 async function reviewSummaryAgentNode(state) {
+    core.info(`[LLM] - Submitting review...`);
     const outputSchema = zod_1.z.object({
         review_summary: zod_1.z.string().describe('Your PR Review summarization.'),
         review_action: zod_1.z
@@ -52556,6 +52560,7 @@ Review Comment: ${comment.comment}
     return { messages: [] };
 }
 async function replyReviewCommentsAgentNode(state) {
+    core.info(`[LLM] - Replying review comments...`);
     const githubAuthenticatedUserLogin = await (0, github_1.getAuthenticatedUserLogin)();
     const listReviewComments = await (0, github_1.getListReviewComments)();
     const topLevelComments = listReviewComments.filter(comment => !comment.in_reply_to_id);
@@ -52585,6 +52590,7 @@ ${repliesMap[topLevelComment.id].map(comment => `- ${comment.user.login === gith
 `)
                 ]);
                 await (0, github_1.replyToReviewComment)(topLevelComment.id, response.content);
+                await (0, utils_1.wait)(2000);
             }
         }
     }
