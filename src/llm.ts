@@ -144,6 +144,8 @@ async function knowledgeUpdatesAgentNode(
     }
   | undefined
 > {
+  core.info('[LLM] - Updating knowledges...')
+
   const model = getModel()
 
   const modelWithTools = model.bindTools!(knowledgeBaseTools)
@@ -165,6 +167,8 @@ async function reviewCommentsAgentNode(
     }
   | undefined
 > {
+  core.info('[LLM] - Reviewing code changes...')
+
   const outputSchema = z.object({
     comment: z.string().describe('Your comment to specific file and position.'),
     position: z
@@ -188,6 +192,8 @@ async function reviewCommentsAgentNode(
 
   for (let i = 0; i < listFiles.length; i++) {
     const listFile = listFiles[i]
+
+    core.info(`[LLM] - Reviewing file: ${listFile.filename} ...`)
 
     const fullFileContent = await getFileContent(listFile.filename)
 
@@ -228,6 +234,8 @@ async function reviewSummaryAgentNode(
     }
   | undefined
 > {
+  core.info(`[LLM] - Submitting review...`)
+
   const outputSchema = z.object({
     review_summary: z.string().describe('Your PR Review summarization.'),
     review_action: z
@@ -280,6 +288,8 @@ async function replyReviewCommentsAgentNode(
     }
   | undefined
 > {
+  core.info(`[LLM] - Replying review comments...`)
+
   const githubAuthenticatedUserLogin = await getAuthenticatedUserLogin()
   const listReviewComments = await getListReviewComments()
 
@@ -328,6 +338,8 @@ ${repliesMap[topLevelComment.id].map(comment => `- ${comment.user.login === gith
           topLevelComment.id,
           response.content as string
         )
+
+        await wait(2000)
       }
     }
   }
