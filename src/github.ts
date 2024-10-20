@@ -128,7 +128,16 @@ export async function submitReview(
   comments: PullRequestReviewComment[],
   action: 'REQUEST_CHANGES' | 'APPROVE' | 'COMMENT'
 ): Promise<void> {
+  const { data: commits } = await octokit.pulls.listCommits({
+    owner,
+    repo,
+    pull_number
+  })
+
+  const latestCommitSha = commits[commits.length - 1].sha
+
   await octokit.pulls.createReview({
+    commit_id: latestCommitSha,
     owner,
     repo,
     pull_number,
