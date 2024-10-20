@@ -144,6 +144,8 @@ async function knowledgeUpdatesAgentNode(
     }
   | undefined
 > {
+  core.info('[LLM] - Updating knowledges...')
+
   const model = getModel()
 
   const modelWithTools = model.bindTools!(knowledgeBaseTools)
@@ -165,13 +167,18 @@ async function reviewCommentsAgentNode(
     }
   | undefined
 > {
+  core.info('[LLM] - Reviewing code changes...')
+
   const outputSchema = z.object({
     comment: z.string().describe('Your comment to specific file and position.'),
     position: z
       .number()
       .describe(
         'The position in the diff / patch where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.'
-      )
+      ),
+    skip: z
+      .boolean()
+      .describe('Set this parameter to true to skip reviewing this change.')
   })
 
   const model = getModel()
@@ -189,29 +196,52 @@ async function reviewCommentsAgentNode(
   for (let i = 0; i < listFiles.length; i++) {
     const listFile = listFiles[i]
 
+    core.info(`[LLM] - Reviewing file: ${listFile.filename} ...`)
+
     const fullFileContent = await getFileContent(listFile.filename)
 
     const response = await modelWithStructuredOutput.invoke([
       ...state.messages,
       new HumanMessage(`Based on given informations from previous chats / messages, and given information below, please create code review comment. You must call "response" tool to give review,
-except the file doesn't need to be reviewed (dist files, generated files, and any other files that don't need to be reviewed.) or the file is already good, no need to comment, lgtm,, in that case, just don't call the tool.
+except the file doesn't need to be reviewed (dist files, generated files, and any other files that don't need to be reviewed.) or the file is already good, no need to comment, lgtm,, in that case, just set skip=true for the tool parameter.
+
+Please note that to determine the position parameter of the tool, you should only refer to the "Changes Patch", not the "Full Source Code". The "Full Source Code" is only
+useful to give you the context about the changes, but to determine the position tool parameter, you will have to count the position only based on "Changes Patch". For example:
+Given this "Changes Patch":
+\`\`\`
+@@ -65,7 +65,7 @@ jobs:
+         uses: ./
+         with:
+           ai_provider: 'GEMINI'
+-          ai_provider_model: 'gemini-1.5-pro'
++          ai_provider_model: 'gemini-1.5-flash'
+           codebase_high_overview_descripton:
+             'This repository is an LLM Code Reviewer Github Action that use
+             typescript implemented with functional programming.'
+\`\`\`
+The position in the diff where you want to add a review comment. Note this value is not the same as the line number in the file. The position value equals the number of lines down from the first "@@" hunk header in the file you want to add a comment. The line just below the "@@" line is position 1, the next line is position 2, and so on. The position in the diff continues to increase through lines of whitespace and additional hunks until the beginning of a new file.
+If you want to comment on the line \`+          ai_provider_model: 'gemini-1.5-flash'\`. You will have to set position to: 4.
+
 Filename: ${listFile.filename}
 Previous Filename: ${listFile.previous_filename}
-============== Changes Patch ==============
-${listFile.patch?.substring(0, FILE_CHANGES_PATCH_TEXT_LIMIT) || ''}
-===================================
 ============ Full Source Code =============
 ${fullFileContent.substring(0, FULL_SOURCE_CODE_TEXT_LIMIT)}
-===========================================`)
+===========================================
+============== Changes Patch ==============
+${listFile.patch?.substring(0, FILE_CHANGES_PATCH_TEXT_LIMIT) || ''}
+===================================`)
     ])
 
     if (response.tool_calls?.length) {
       const tool_call_args = response.tool_calls[0].args
-      comments.push({
-        comment: tool_call_args.comment,
-        position: tool_call_args.position,
-        path: listFile.filename
-      })
+
+      if (!tool_call_args.skip) {
+        comments.push({
+          comment: tool_call_args.comment,
+          position: tool_call_args.position,
+          path: listFile.filename
+        })
+      }
     }
 
     await wait(1000)
@@ -228,6 +258,8 @@ async function reviewSummaryAgentNode(
     }
   | undefined
 > {
+  core.info(`[LLM] - Submitting review...`)
+
   const outputSchema = z.object({
     review_summary: z.string().describe('Your PR Review summarization.'),
     review_action: z
@@ -280,6 +312,8 @@ async function replyReviewCommentsAgentNode(
     }
   | undefined
 > {
+  core.info(`[LLM] - Replying review comments...`)
+
   const githubAuthenticatedUserLogin = await getAuthenticatedUserLogin()
   const listReviewComments = await getListReviewComments()
 
@@ -328,6 +362,8 @@ ${repliesMap[topLevelComment.id].map(comment => `- ${comment.user.login === gith
           topLevelComment.id,
           response.content as string
         )
+
+        await wait(2000)
       }
     }
   }

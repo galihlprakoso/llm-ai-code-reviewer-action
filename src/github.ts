@@ -24,7 +24,7 @@ const repo = context.repo.repo
 const pull_number = context.payload.pull_request?.number || 0
 
 core.debug(
-  `[github.ts] - context: ${JSON.stringify({
+  `[GITHUB] - context: ${JSON.stringify({
     owner,
     repo,
     pull_number
@@ -57,9 +57,7 @@ export async function getLocalRepoStructure(
       }
     }
   } catch (error) {
-    core.debug(
-      `[github.ts] - getLocalRepoStructure: ${(error as Error).message}`
-    )
+    core.debug(`[GITHUB] - getLocalRepoStructure: ${(error as Error).message}`)
     return ''
   }
 
@@ -68,7 +66,7 @@ export async function getLocalRepoStructure(
 
 export async function getFileContent(path: string): Promise<string> {
   try {
-    core.debug(`[github.ts] - getFileContent - path:${path}`)
+    core.debug(`[GITHUB] - getFileContent - path:${path}`)
 
     const response = await octokit.repos.getContent({
       owner,
@@ -80,13 +78,11 @@ export async function getFileContent(path: string): Promise<string> {
       }
     })
 
-    core.debug(`[github.ts] - getFileContent - ${JSON.stringify(response)}`)
+    core.debug(`[GITHUB] - getFileContent - ${JSON.stringify(response)}`)
 
     return response.data.toString()
   } catch (err) {
-    core.debug(
-      `[github.ts] - getFileContent -  Error: ${(err as Error).message}`
-    )
+    core.debug(`[GITHUB] - getFileContent -  Error: ${(err as Error).message}`)
 
     return CONTENT_NOT_FOUND
   }
@@ -101,7 +97,7 @@ export async function getReadme(): Promise<string> {
     }
   })
 
-  core.debug(`[github.ts] - getReadme - ${JSON.stringify(response)}`)
+  core.debug(`[GITHUB] - getReadme - ${JSON.stringify(response)}`)
 
   return response.data.toString()
 }
@@ -132,7 +128,16 @@ export async function submitReview(
   comments: PullRequestReviewComment[],
   action: 'REQUEST_CHANGES' | 'APPROVE' | 'COMMENT'
 ): Promise<void> {
+  const { data: commits } = await octokit.pulls.listCommits({
+    owner,
+    repo,
+    pull_number
+  })
+
+  const latestCommitSha = commits[commits.length - 1].sha
+
   await octokit.pulls.createReview({
+    commit_id: latestCommitSha,
     owner,
     repo,
     pull_number,

@@ -65,7 +65,7 @@ jobs:
         uses: ./
         with:
           ai_provider: 'GEMINI'
-          ai_provider_model: 'gemini-1.5-pro'
+          ai_provider_model: 'gemini-1.5-flash'
           codebase_high_overview_descripton:
             'This repository is an LLM Code Reviewer Github Action that use
             typescript implemented with functional programming.'
