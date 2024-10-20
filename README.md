@@ -80,7 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run AI Code Review
-        uses: galihlprakoso/llm-ai-code-reviewer-action@v1.1.1
+        uses: galihlprakoso/llm-ai-code-reviewer-action@v1.1.2
         with:
           ai_provider: 'GROQ'
           ai_provider_model: 'llama-3.1-70b-versatile'
